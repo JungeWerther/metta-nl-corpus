@@ -89,7 +89,7 @@ Some examples:
 ```
 
 Some notes:
-- "the" and "this" almost always carry the same meaning. Even they it'll be possible to use them interchangably in most cases, let's use them in the way they are mentioned.
+- "the" and "this" almost always carry the same meaning. Even though it'll be possible to use them interchangably in most cases, let's use them in the way they are mentioned.
 - same for "a" and "some"
 - let's agree to place the object before the attribute in binary predicates: `(hasColour John green)` over `(hasColour green John)`
 - try to make predicates as granular as possible! `(isColour John yellow)` is more meaningful than `(isYellow John)`.
@@ -138,3 +138,47 @@ Hey! what is the `,` doing there? Well, in the Curry-Howard correspondence, the 
 Some rules:
 - Let's agree that `and` and `or` always take two arguments. Use nesting (like a `List` datastructure) if you need to chain connectives.
 - `,` can be used instead of `and`, while `+` is equivalent to `or`. Let's prefer to use `and` and `or` for readibility.
+
+### PLN logic
+<under construction>
+
+- all represented as types
+
+```lisp
+;; The temple was in Kathmendu.
+
+(: LocatedIn (-> Object Object Type))
+(: Tense (-> Type String Type))
+(: Temple (-> Object Type))
+(: Name (-> Object String Type))
+(: t Object)
+(: k Object)
+(: t_temple (Temple t))
+(: k_name (Name k "Kathmandu"))
+(: loc_t_k (LocatedIn t k))
+(: tense_loc_the_t_k (Tense loc_t_k "past"))``
+
+```
+- dependent sums as existential quantifiers
+
+```
+;; Every girl has a phone.
+
+(: Girl (-> Object Type))
+(: Phone (-> Object Type))
+(: g_has_h
+   (-> (: $prf (Girl $g))
+       (Σ (: $p Object)
+          (* (: $pprf (Phone $p))
+             (: $hprf (Has $g $p))))))
+```
+
+Higher kinded predicates as type modifiers
+```
+;; Upper dermis
+
+(: Upper (-> (-> Object Type) (-> Object Type)))
+(: Dermis (-> Object Type))
+(: ud Object)
+(: ud_upper_dermis ((Upper Dermis) ud))
+```
