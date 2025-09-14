@@ -3,11 +3,12 @@ name = "metta-nl-corpus"
 version = "0.1.0"
 description = "Labeling pipeline for MeTTa-NL-Corpus"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "dagster>=1.11.10",
     "dagster-dg-cli>=1.11.10",
     "huggingface-hub>=0.34.4",
+    "hyperon>=0.2.8",
     "ollama>=0.5.3",
     "pandera>=0.26.1",
     "polars>=1.33.1",
