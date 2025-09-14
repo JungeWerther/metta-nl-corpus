@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable, Protocol
 import polars as pl
 
 from dagster._core.execution.context.asset_execution_context import (
@@ -9,10 +9,19 @@ from dagster._core.execution.context.asset_execution_context import (
 from metta_nl_corpus.lib.interfaces import Fn, Transformation
 
 
+class Indexable(Protocol):
+    def __getitem__(self, name: Any) -> ...:
+        pass
+
+
 class Always[T]:
     @staticmethod
     def validate(value: T) -> T:
         return value
+
+
+class Never:
+    pass
 
 
 @dataclass
@@ -52,3 +61,17 @@ def on_data[T, U](f: Fn[pl.DataFrame, U]) -> Fn[Box[pl.DataFrame], Box[U]]:
         return Box(f(box.data), box.context)
 
     return unit
+
+
+def str_index[T](mapping: Iterable, coalesce: T = Never) -> Fn[int, T]:
+    def inner(number: int) -> T:
+        for i, n in enumerate(mapping):
+            if i == number:
+                return n
+
+        if coalesce != Never:
+            return coalesce
+
+        raise IndexError(f"Invalid index <{number}> for mapping <{mapping}>.")
+
+    return inner

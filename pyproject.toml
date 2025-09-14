@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "dagster>=1.11.10",
     "dagster-dg-cli>=1.11.10",
+    "huggingface-hub>=0.34.4",
     "pandera>=0.26.1",
     "polars>=1.33.1",
     "pydantic>=2.11.9",
@@ -25,7 +26,10 @@ packages = ["metta_nl_corpus"]
 allow-direct-references = true
 
 [dependency-groups]
-dev = ["pre-commit>=4.3.0"]
+dev = [
+    "huggingface-hub[cli]>=0.34.4",
+    "pre-commit>=4.3.0",
+]
 
 [tool.dagster]
 module_name = "metta-nl_corpus.services.definitions"
