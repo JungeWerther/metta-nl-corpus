@@ -8,6 +8,7 @@ dependencies = [
     "dagster>=1.11.10",
     "dagster-dg-cli>=1.11.10",
     "huggingface-hub>=0.34.4",
+    "ollama>=0.5.3",
     "pandera>=0.26.1",
     "polars>=1.33.1",
     "pydantic>=2.11.9",

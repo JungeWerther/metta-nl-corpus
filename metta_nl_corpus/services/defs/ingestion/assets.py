@@ -1,12 +1,13 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pandera.polars import DataFrameModel
+from pandera.polars import DataFrameModel, Field
 from huggingface_hub import hf_hub_download
 
 from dagster._core.definitions.assets.definition.assets_definition import (
     AssetsDefinition,
 )
+from pandera.typing.common import UInt32
 import polars as pl
 from dagster import AssetExecutionContext, Config, asset
 
@@ -18,20 +19,25 @@ from structlog import getLogger
 
 logger = getLogger(__name__)
 
-SUBSET_SIZE = 100
+DATA_VERSION = "0.0.1"
+SUBSET_SIZE = 3
 
 
-class TrainingData(DataFrameModel):
+class TrainingBase(DataFrameModel):
     premise: str
     hypothesis: str
+
+
+class TrainingData(TrainingBase):
     label: int
 
 
-class Annotations(TrainingData):
-    id: int
-    metta_premise: str
-    metta_hypothesis: str
-    version: str
+class Annotations(TrainingBase):
+    index: UInt32
+    label: str
+    metta_premise: str | None
+    metta_hypothesis: str | None
+    version: str = Field(default=DATA_VERSION)
 
 
 training_dataset_path = hf_hub_download(
