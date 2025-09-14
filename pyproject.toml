@@ -1,0 +1,44 @@
+[project]
+name = "metta-nl-corpus"
+version = "0.1.0"
+description = "Labeling pipeline for MeTTa-NL-Corpus"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dagster>=1.11.10",
+    "dagster-dg-cli>=1.11.10",
+    "huggingface-hub>=0.34.4",
+    "ollama>=0.5.3",
+    "pandera>=0.26.1",
+    "polars>=1.33.1",
+    "pydantic>=2.11.9",
+    "sqlalchemy>=2.0.43",
+    "sqlmodel>=0.0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["metta_nl_corpus"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "huggingface-hub[cli]>=0.34.4",
+    "pre-commit>=4.3.0",
+]
+
+[tool.dagster]
+module_name = "metta-nl_corpus.services.definitions"
+code_location_name = "your_code_location_name"  ## optional, name of code location to display in the Dagster UI
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "metta_nl_corpus"
+code_location_target_module = "metta_nl_corpus.services.defs"
