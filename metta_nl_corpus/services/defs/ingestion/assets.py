@@ -20,7 +20,7 @@ from structlog import getLogger
 logger = getLogger(__name__)
 
 DATA_VERSION = "0.0.1"
-SUBSET_SIZE = 3
+SUBSET_SIZE = 50
 
 
 class TrainingBase(DataFrameModel):
@@ -125,13 +125,9 @@ def preprocessed_training_data(
     Creates a complete dataset for training with all text fields.
     """
 
-    df = (
-        raw_training_data.head(SUBSET_SIZE)
-        .with_row_index()
-        .with_columns(
-            pl.col(str(TrainingData.label)).map_elements(
-                str_index(RelationKind, RelationKind.NO_LABEL), return_dtype=pl.String
-            )
+    df = raw_training_data.with_row_index().with_columns(
+        pl.col(str(TrainingData.label)).map_elements(
+            str_index(RelationKind, RelationKind.NO_LABEL), return_dtype=pl.String
         )
     )
 

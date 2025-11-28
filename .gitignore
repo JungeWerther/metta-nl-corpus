@@ -39,5 +39,9 @@ override.tf.json
 .terraformrc
 terraform.rc
 
-*/__pycache__
-*/.tmp
+# Ignore Python cache and temporary files
+__pycache__
+.tmp*
+
+# Ignore data directory
+metta_nl_corpus/data
