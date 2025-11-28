@@ -125,13 +125,9 @@ def preprocessed_training_data(
     Creates a complete dataset for training with all text fields.
     """
 
-    df = (
-        raw_training_data
-        .with_row_index()
-        .with_columns(
-            pl.col(str(TrainingData.label)).map_elements(
-                str_index(RelationKind, RelationKind.NO_LABEL), return_dtype=pl.String
-            )
+    df = raw_training_data.with_row_index().with_columns(
+        pl.col(str(TrainingData.label)).map_elements(
+            str_index(RelationKind, RelationKind.NO_LABEL), return_dtype=pl.String
         )
     )
 
