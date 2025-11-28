@@ -20,7 +20,7 @@ from structlog import getLogger
 logger = getLogger(__name__)
 
 DATA_VERSION = "0.0.1"
-SUBSET_SIZE = 3
+SUBSET_SIZE = 50
 
 
 class TrainingBase(DataFrameModel):
@@ -126,7 +126,7 @@ def preprocessed_training_data(
     """
 
     df = (
-        raw_training_data.head(SUBSET_SIZE)
+        raw_training_data
         .with_row_index()
         .with_columns(
             pl.col(str(TrainingData.label)).map_elements(

@@ -14,6 +14,9 @@ def create_empty_parquet_from_schema_if_not_exists(
     )
 
     if not os.path.exists(file_path):
+        # Create parent directory if it doesn't exist
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
         dtypes = {k: v.type for k, v in dataframe_model.to_schema().dtypes.items()}
 
         df = pl.DataFrame(schema=dtypes)

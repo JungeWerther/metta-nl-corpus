@@ -3,7 +3,6 @@ from pathlib import Path
 from dagster import (
     Definitions,
     FilesystemIOManager,
-    IOManagerDefinition,
     ResourceDefinition,
     load_assets_from_modules,
 )
@@ -20,9 +19,7 @@ all_assets = [
 
 # Define resources
 resources = {
-    "io_manager": IOManagerDefinition.hardcoded_io_manager(
-        FilesystemIOManager(base_dir=str(Path(__file__).parent.parent / "data"))
-    ),
+    "io_manager": FilesystemIOManager(base_dir=str(Path(__file__).parent.parent / "data")),
     "database_url": ResourceDefinition.string_resource("sqlite:///data.db"),
 }
 

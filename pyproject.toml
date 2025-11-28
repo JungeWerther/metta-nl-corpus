@@ -31,10 +31,11 @@ allow-direct-references = true
 dev = [
     "huggingface-hub[cli]>=0.34.4",
     "pre-commit>=4.3.0",
+    "dagster-webserver>=1.11.10",
 ]
 
 [tool.dagster]
-module_name = "metta-nl_corpus.services.definitions"
+module_name = "metta_nl_corpus.services.definitions"
 code_location_name = "your_code_location_name"  ## optional, name of code location to display in the Dagster UI
 
 [tool.dg]
