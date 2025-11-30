@@ -1,24 +1,41 @@
 import random
-from typing import Tuple
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import NamedTuple
 
 import polars as pl
 from dagster import asset
+from huggingface_hub.utils import tqdm
+from ollama import chat
 from structlog import getLogger
 
 from metta_nl_corpus.constants import ANNOTATION_GUIDELINE_PATH, ANNOTATIONS_PATH
+from metta_nl_corpus.lib.interfaces import Fn
+from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.services.defs.ingestion.assets import (
     DATA_VERSION,
     Annotations,
     TrainingData,
 )
-from ollama import chat
-
 
 logger = getLogger(__name__)
 
 
-def ollama_generate_from_template(text: str, additional_context: str | None = None):
-    user_content = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
+class GenerationFailureReason(StrEnum):
+    NO_CONTENT = "no_content"
+    NO_METTA_EXPRESSION = "no_metta_expression"
+    EMPTY_EXPRESSION = "empty_expression"
+
+
+class GenerationResult(NamedTuple):
+    expression: str | None
+    failure_reason: GenerationFailureReason | None
+
+
+def ollama_generate_from_template(
+    text: str, additional_context: str | None = None
+) -> GenerationResult:
+    user_content: str = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
         text=text
     )
 
@@ -36,18 +53,30 @@ def ollama_generate_from_template(text: str, additional_context: str | None = No
         ],
     )
 
-    content = response.message.content
+    content: str | None = response.message.content
 
-    logger.info(f"Generated: {content}")
+    logger.info("Generated LLM response", content=content)
 
     if not content:
-        return None
+        return GenerationResult(
+            expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
+        )
 
-    trimmed = content.strip().split("(", 1)[1].rsplit(")", 1)[0]
-    if trimmed == "":
-        return None
+    # Try to extract MeTTa expression from content
+    try:
+        # Remove outer parentheses using rsplit and lsplit
+        trimmed = content.strip().lstrip("(").rstrip(")")
 
-    return f"({trimmed})"
+        if not trimmed:
+            return GenerationResult(
+                expression=None, failure_reason=GenerationFailureReason.EMPTY_EXPRESSION
+            )
+    except Exception:
+        return GenerationResult(
+            expression=None, failure_reason=GenerationFailureReason.NO_METTA_EXPRESSION
+        )
+
+    return GenerationResult(expression=f"({trimmed})", failure_reason=None)
 
 
 def validate_expressions_are_contradictory(premise: str, hypothesis: str) -> bool:
@@ -57,7 +86,7 @@ def validate_expressions_are_contradictory(premise: str, hypothesis: str) -> boo
 
 def generate_and_validate(
     premise: str, hypothesis: str, max_attempts: int = 3
-) -> Tuple[str | None, str | None]:
+) -> tuple[str, str] | tuple[None, None]:
     """
     Generate MeTTa expressions for premise and hypothesis, validate them,
     and retry with additional context if validation fails.
@@ -71,11 +100,13 @@ def generate_and_validate(
         metta_premise = ollama_generate_from_template(premise, additional_context)
         metta_hypothesis = ollama_generate_from_template(hypothesis, additional_context)
 
-        if metta_premise is None or metta_hypothesis is None:
+        if not metta_premise.expression or not metta_hypothesis.expression:
             return (None, None)
 
-        if validate_expressions_are_contradictory(metta_premise, metta_hypothesis):
-            return (metta_premise, metta_hypothesis)
+        if validate_expressions_are_contradictory(
+            metta_premise.expression, metta_hypothesis.expression
+        ):
+            return (metta_premise.expression, metta_hypothesis.expression)
 
         # If validation failed, generate again with additional context
         additional_context = f"The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} {metta_premise=} {metta_hypothesis=}"
@@ -83,12 +114,53 @@ def generate_and_validate(
     return (None, None)
 
 
-@asset()
+def process_in_batches(
+    rows: list[dict],
+    process_fn: Fn[dict, Mapping],
+    subset_size: int,
+    batch_size: int,
+    description: str = "Processing",
+) -> list[dict]:
+    """
+    Process rows in batches with progress tracking.
+
+    Args:
+        rows: List of row dictionaries to process
+        process_fn: Function to apply to each row
+        subset_size: Maximum number of rows to process
+        batch_size: Number of rows to process in each batch
+        description: Description for the progress bar
+
+    Returns:
+        List of processed row dictionaries
+    """
+    # Limit to subset_size
+    rows_to_process = rows[:subset_size]
+    processed_rows = []
+
+    # Process in batches with tqdm
+    for i in tqdm(
+        range(0, len(rows_to_process), batch_size),
+        desc=description,
+        unit="batch",
+        total=(len(rows_to_process) + batch_size - 1) // batch_size,
+    ):
+        batch = rows_to_process[i : min(subset_size, i + batch_size)]
+        batch_results = [process_fn(row) for row in batch]
+        processed_rows.extend(batch_results)
+
+    return processed_rows
+
+
+@asset(required_resource_keys={"pipeline_config"})
 def data_annotations(
-    preprocessed_training_data: pl.DataFrame, cached_annotations: pl.DataFrame
+    context,
+    preprocessed_training_data: pl.DataFrame,
+    cached_annotations: pl.DataFrame,
 ) -> pl.DataFrame:
-    logger.info(preprocessed_training_data)
-    logger.info(cached_annotations)
+    pipeline_config: PipelineRunConfig = context.resources.pipeline_config
+
+    logger.info("Starting data annotation", pipeline_config=pipeline_config)
 
     # Get indices not in preprocessed training data
     unannotated_data_points = preprocessed_training_data.filter(
@@ -105,7 +177,6 @@ def data_annotations(
         ]
     )
 
-    # TODO(seb): implement batching
     # Apply generate_and_validate to all rows
     def process_row(row: dict) -> dict:
         premise = row[str(TrainingData.premise)]
@@ -116,19 +187,34 @@ def data_annotations(
             str(Annotations.metta_hypothesis): metta_hypothesis,
         }
 
-    # Convert to dict, process rows, and convert back to DataFrame
     rows = premise_hypothesis_dataset.to_dicts()
-    processed_rows = [process_row(row) for row in rows]
-    generated_results = pl.DataFrame(processed_rows)
+    processed_rows = process_in_batches(
+        rows=rows,
+        process_fn=process_row,
+        subset_size=pipeline_config.subset_size,
+        batch_size=pipeline_config.batch_size,
+        description="Generating MeTTa annotations",
+    )
+    generated_results = pl.DataFrame(
+        processed_rows,
+        schema={
+            str(Annotations.metta_premise): pl.String,
+            str(Annotations.metta_hypothesis): pl.String,
+        },
+    )
 
     # Add the generated columns to the annotated_data_points dataset
-    annotated_data_points = unannotated_data_points.with_columns(
-        [
-            generated_results[str(Annotations.metta_premise)],
-            generated_results[str(Annotations.metta_hypothesis)],
-            pl.lit(DATA_VERSION).alias(Annotations.version),
-        ]
-    ).drop_nulls()
+    annotated_data_points = (
+        unannotated_data_points.head(pipeline_config.subset_size)
+        .with_columns(
+            [
+                generated_results[str(Annotations.metta_premise)],
+                generated_results[str(Annotations.metta_hypothesis)],
+                pl.lit(DATA_VERSION).alias(Annotations.version),
+            ]
+        )
+        .drop_nulls()
+    )
 
     versioned_data = Annotations.validate(annotated_data_points)
     new_result = pl.concat([cached_annotations, versioned_data], how="align")
