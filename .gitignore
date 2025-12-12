@@ -2,11 +2,15 @@
 **/.terraform/*
 
 env/
+.env
 *.parquet
 
 # .tfstate files
 *.tfstate
 *.tfstate.*
+
+# dagster
+.dagster/
 
 # Crash log files
 crash.log
