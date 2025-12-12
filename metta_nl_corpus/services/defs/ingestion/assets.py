@@ -37,6 +37,7 @@ class Annotations(TrainingBase):
     label: str
     metta_premise: str | None
     metta_hypothesis: str | None
+    is_valid: bool
     version: str = Field(default=DATA_VERSION)
 
 
@@ -87,6 +88,16 @@ load_ndjson_from_path = to_boxed_path_loader(pl.read_ndjson)
 load_parquet_from_path = to_boxed_path_loader(pl.read_parquet)
 
 
+def load_annotations(file_path: Path) -> pl.DataFrame:
+    df = pl.read_parquet(file_path)
+    if "is_valid" not in df.columns:
+        df = df.with_columns(pl.lit(True).alias("is_valid"))
+    return df
+
+
+load_annotations_from_path = to_boxed_path_loader(load_annotations)
+
+
 def make_asset(name: str, _loader: Loader, dataset: Dataset) -> AssetsDefinition:
     def inner(context: AssetExecutionContext, config: BaseConfig) -> pl.DataFrame:
         file_path = Path(dataset)
@@ -112,7 +123,7 @@ raw_training_data = make_asset(
 )
 
 cached_annotations = make_asset(
-    "cached_annotations", load_parquet_from_path, Dataset.annotations
+    "cached_annotations", load_annotations_from_path, Dataset.annotations
 )
 
 
