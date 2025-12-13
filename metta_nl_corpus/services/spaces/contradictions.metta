@@ -46,10 +46,10 @@
 ; =====================
 ;; !((swan) true)
 
-(= (swan) (when
-           (Property white (Property bird ())) ; when true
-            (Property red-haired (Property fish ())) ; when false
-            ))
+; (= (swan) (when
+;            (Property white (Property bird ())) ; when true
+;             (Property red-haired (Property fish ())) ; when false
+;             ))
 
 ; storing such observations in a space, we need some helper functions to find
 ; all true and false properties of each object
@@ -83,13 +83,13 @@
 ; =====================
 ;; !(contradiction swan)
 
-(= (swan) (when
-           (Property white (Property red-haired ())) ; when true
-            (Property red-haired (Property bird ())) ; when false
-            ))
+; (= (swan) (when
+;            (Property white (Property red-haired ())) ; when true
+;             (Property red-haired (Property bird ())) ; when false
+;             ))
 
-! (true_for swan)
-! (false_for swan)
+; ! (true_for swan)
+; ! (false_for swan)
 
 (= (contradiction $object) (unify &truth ($x) (let $y ($x) (unify &falsity $y $y Fail)) Fail))
-! (contradiction swan)
+; ! (contradiction swan)

@@ -1,6 +1,7 @@
 """Service for executing Dagster pipelines with static assets."""
 
 import asyncio
+import os
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -46,7 +47,10 @@ class PipelineExecutor:
     """Executes Dagster pipelines with static assets."""
 
     def __init__(self):
-        self.instance = DagsterInstance.get()
+        if os.getenv("DAGSTER_HOME"):
+            self.instance = DagsterInstance.get()
+        else:
+            self.instance = DagsterInstance.ephemeral()
 
     async def execute_pipeline(
         self,

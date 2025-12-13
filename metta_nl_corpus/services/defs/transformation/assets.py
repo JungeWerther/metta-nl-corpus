@@ -1,29 +1,37 @@
-import random
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import polars as pl
 from dagster import asset
+from dotenv import load_dotenv
 from huggingface_hub.utils import tqdm
+from hyperon import MeTTa
 from ollama import chat
+from openai import OpenAI
 from structlog import getLogger
 
-from metta_nl_corpus.constants import ANNOTATION_GUIDELINE_PATH, ANNOTATIONS_PATH
+from metta_nl_corpus.constants import (
+    ANNOTATION_GUIDELINE_PATH,
+    ANNOTATIONS_PATH,
+    PROJECT_ROOT,
+)
 from metta_nl_corpus.lib.interfaces import Fn
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.services.defs.ingestion.assets import (
     DATA_VERSION,
     Annotations,
     TrainingData,
+    RelationKind,
 )
 
 logger = getLogger(__name__)
 
+load_dotenv(".env.local")
+
 
 class GenerationFailureReason(StrEnum):
     NO_CONTENT = "no_content"
-    NO_METTA_EXPRESSION = "no_metta_expression"
     EMPTY_EXPRESSION = "empty_expression"
 
 
@@ -32,8 +40,65 @@ class GenerationResult(NamedTuple):
     failure_reason: GenerationFailureReason | None
 
 
+def parse_metta_expression(expression: str) -> str:
+    expression_lines = expression.splitlines()
+    if len(expression_lines) >= 1:
+        if "```" in expression_lines[0]:
+            expression_lines = expression_lines[1:]
+        if "```" in expression_lines[-1]:
+            expression_lines = expression_lines[:-1]
+        return "\n".join(expression_lines).strip()
+    else:
+        return expression
+
+
+def extract_metta_expression(content: str | None) -> GenerationResult:
+    if not content:
+        return GenerationResult(
+            expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
+        )
+
+    trimmed = parse_metta_expression(content)
+    if not trimmed:
+        return GenerationResult(
+            expression=None, failure_reason=GenerationFailureReason.EMPTY_EXPRESSION
+        )
+
+    return GenerationResult(expression=trimmed, failure_reason=None)
+
+
+def openai_generate_from_template(
+    text: str, model: str, additional_context: str | None = None
+) -> GenerationResult:
+    user_content: str = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
+        text=text
+    )
+
+    if additional_context:
+        user_content = f"{user_content}\n\n{additional_context}"
+
+    try:
+        client = OpenAI()  # Uses OPENAI_API_KEY env var
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": ANNOTATION_GUIDELINE_PATH.read_text()},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        content = response.choices[0].message.content
+    except Exception as e:
+        logger.error("OpenAI generation failed", error=str(e))
+        return GenerationResult(
+            expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
+        )
+
+    logger.info("Generated LLM response", content=content)
+    return extract_metta_expression(content)
+
+
 def ollama_generate_from_template(
-    text: str, additional_context: str | None = None
+    text: str, model: str, additional_context: str | None = None
 ) -> GenerationResult:
     user_content: str = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
         text=text
@@ -43,7 +108,7 @@ def ollama_generate_from_template(
         user_content = f"{user_content}\n\n{additional_context}"
 
     response = chat(
-        model="gemma3:1b",
+        model=model,
         messages=[
             {"role": "system", "content": ANNOTATION_GUIDELINE_PATH.read_text()},
             {
@@ -56,62 +121,131 @@ def ollama_generate_from_template(
     content: str | None = response.message.content
 
     logger.info("Generated LLM response", content=content)
+    return extract_metta_expression(content)
 
-    if not content:
-        return GenerationResult(
-            expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
-        )
 
-    # Try to extract MeTTa expression from content
+def validate_expressions_are_contradictory(
+    metta_premise: Optional[str], metta_hypothesis: Optional[str]
+) -> bool:
+    if not metta_premise or not metta_hypothesis:
+        return False
+
     try:
-        # Remove outer parentheses using rsplit and lsplit
-        trimmed = content.strip().lstrip("(").rstrip(")")
+        runner = MeTTa()
 
-        if not trimmed:
-            return GenerationResult(
-                expression=None, failure_reason=GenerationFailureReason.EMPTY_EXPRESSION
-            )
-    except Exception:
-        return GenerationResult(
-            expression=None, failure_reason=GenerationFailureReason.NO_METTA_EXPRESSION
+        # Load background knowledge
+        contradictions_path = (
+            PROJECT_ROOT / "metta_nl_corpus/services/spaces/contradictions.metta"
         )
 
-    return GenerationResult(expression=f"({trimmed})", failure_reason=None)
+        # Read the file content
+        with open(contradictions_path, "r") as f:
+            metta_code = f.read()
 
+        runner.run(metta_code)
 
-def validate_expressions_are_contradictory(premise: str, hypothesis: str) -> bool:
-    # TODO(seb): implement real validation logic
-    return random.random() > 0.5
+        # Run premise and hypothesis
+        if metta_premise:
+            runner.run(metta_premise)
+        if metta_hypothesis:
+            runner.run(metta_hypothesis)
+
+        # Check for intersection between truth and falsity spaces
+        result = runner.run("!(match &truth $x (match &falsity $x True))")
+        logger.info("MeTTa validation result", result=result)
+
+        # result is a list of results (atoms)
+        if result and len(result) > 0 and len(result[0]) > 0:
+            logger.info(
+                "MeTTa expressions are contradictory",
+            )
+            return True
+
+    except Exception as e:
+        logger.warning("MeTTa validation failed", error=str(e))
+        return False
+
+    logger.info(
+        "MeTTa expressions are not contradictory",
+    )
+    return False
 
 
 def generate_and_validate(
-    premise: str, hypothesis: str, max_attempts: int = 3
-) -> tuple[str, str] | tuple[None, None]:
+    premise: str,
+    hypothesis: str,
+    label: str,
+    annotation_model: str,
+    max_attempts: int = 3,
+) -> tuple[str | None, str | None, bool]:
     """
     Generate MeTTa expressions for premise and hypothesis, validate them,
     and retry with additional context if validation fails.
 
-    Returns a tuple of (metta_premise, metta_hypothesis) or (None, None) if generation fails.
+    Returns:
+        tuple[str | None, str | None, bool]: (metta_premise, metta_hypothesis, is_valid)
     """
     additional_context = None
+    last_metta_premise = None
+    last_metta_hypothesis = None
+
+    is_openai = annotation_model.startswith(("gpt", "o1"))
+    generate_fn = (
+        openai_generate_from_template if is_openai else ollama_generate_from_template
+    )
+
     for attempt in range(max_attempts):
-        logger.info(f"Generating MeTTa expressions (attempt {attempt})")
+        logger.info(
+            f"Generating MeTTa expressions (attempt {attempt})", model=annotation_model
+        )
 
-        metta_premise = ollama_generate_from_template(premise, additional_context)
-        metta_hypothesis = ollama_generate_from_template(hypothesis, additional_context)
+        metta_premise_result = generate_fn(
+            premise, annotation_model, additional_context
+        )
+        if not metta_premise_result.expression:
+            logger.error(
+                "Failed to generate MeTTa expression for premise",
+                premise=premise,
+                error=metta_premise_result.failure_reason,
+            )
+            continue
 
-        if not metta_premise.expression or not metta_hypothesis.expression:
-            return (None, None)
+        metta_hypothesis_context = f"""
+        Previously we processed the premise: {premise=} and generated the following MeTTa expression: {metta_premise_result.expression}.
+        Now we need to process the hypothesis: {hypothesis=} and generate a MeTTa expression that can be validated as a contradiction or
+        not a contradiction with the previously generated MeTTa expression.
+        """
+        if additional_context:
+            metta_hypothesis_context += f"\n\n{additional_context}"
+        metta_hypothesis_result = generate_fn(
+            hypothesis, annotation_model, metta_hypothesis_context
+        )
 
-        if validate_expressions_are_contradictory(
-            metta_premise.expression, metta_hypothesis.expression
+        last_metta_premise = metta_premise_result.expression
+        last_metta_hypothesis = metta_hypothesis_result.expression
+
+        logger.info(
+            "Generated MeTTa expressions for premise and hypothesis",
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise=last_metta_premise,
+            metta_hypothesis=last_metta_hypothesis,
+        )
+
+        if (
+            validate_expressions_are_contradictory(
+                last_metta_premise, last_metta_hypothesis
+            )
+            and label == RelationKind.CONTRADICTION
+            or label != RelationKind.CONTRADICTION
         ):
-            return (metta_premise.expression, metta_hypothesis.expression)
+            return (last_metta_premise, last_metta_hypothesis, True)
 
         # If validation failed, generate again with additional context
-        additional_context = f"The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} {metta_premise=} {metta_hypothesis=}"
+        additional_context = f"The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} metta_premise={last_metta_premise} metta_hypothesis={last_metta_hypothesis}"
 
-    return (None, None)
+    # Return the last generated expressions even if validation failed
+    return (last_metta_premise, last_metta_hypothesis, False)
 
 
 def process_in_batches(
@@ -174,6 +308,7 @@ def data_annotations(
         [
             pl.col(str(TrainingData.premise)),
             pl.col(str(TrainingData.hypothesis)),
+            pl.col(str(TrainingData.label)),
         ]
     )
 
@@ -181,10 +316,17 @@ def data_annotations(
     def process_row(row: dict) -> dict:
         premise = row[str(TrainingData.premise)]
         hypothesis = row[str(TrainingData.hypothesis)]
-        metta_premise, metta_hypothesis = generate_and_validate(premise, hypothesis)
+        label = row[str(TrainingData.label)]
+        metta_premise, metta_hypothesis, is_valid = generate_and_validate(
+            premise,
+            hypothesis,
+            label,
+            annotation_model=pipeline_config.annotation_model,
+        )
         return {
             str(Annotations.metta_premise): metta_premise,
             str(Annotations.metta_hypothesis): metta_hypothesis,
+            str(Annotations.is_valid): is_valid,
         }
 
     rows = premise_hypothesis_dataset.to_dicts()
@@ -200,20 +342,23 @@ def data_annotations(
         schema={
             str(Annotations.metta_premise): pl.String,
             str(Annotations.metta_hypothesis): pl.String,
+            str(Annotations.is_valid): pl.Boolean,
         },
     )
 
     # Add the generated columns to the annotated_data_points dataset
     annotated_data_points = (
-        unannotated_data_points.head(pipeline_config.subset_size)
-        .with_columns(
+        unannotated_data_points.head(pipeline_config.subset_size).with_columns(
             [
                 generated_results[str(Annotations.metta_premise)],
                 generated_results[str(Annotations.metta_hypothesis)],
+                generated_results[str(Annotations.is_valid)],
                 pl.lit(DATA_VERSION).alias(Annotations.version),
             ]
         )
-        .drop_nulls()
+        # We no longer drop nulls because we want to keep invalid annotations
+        # But we might want to filter out rows where generation completely failed (if both are null)?
+        # For now, keeping everything as requested by "outputs are stored even if they don't produce a validated output"
     )
 
     versioned_data = Annotations.validate(annotated_data_points)

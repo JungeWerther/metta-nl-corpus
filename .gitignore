@@ -51,3 +51,7 @@ __pycache__
 
 # Ignore data directory
 metta_nl_corpus/data
+
+# Environment variables
+.env
+.env.local
