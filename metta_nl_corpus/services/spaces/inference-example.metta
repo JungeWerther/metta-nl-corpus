@@ -36,5 +36,20 @@
 !(entails-contradication? this-swan)
 !(entails-contradication? swan)
 
+!(add-proposition (
+  (=> $A $C)
+  (, (=> $A $B) (=> $B $C))
+  ))
+
+!(all)
+!(deduce-from (, (=> Socrates man) (=> man mortal))) ;; returns [((=> Socrates mortal))]
+
+
+!(add-proposition (=> Socrates man))
+!(add-proposition (=> man mortal))
+!(find-evidence-for (=> Socrates mortal)) ;; returns [(, (=> Socrates man) (=> man mortal))]
+!(find-evidence-for (=> a h)) ;; does not return evidence
+
+
 ;; questions:
 ;; - naming conventions? capital vs lowercase?
