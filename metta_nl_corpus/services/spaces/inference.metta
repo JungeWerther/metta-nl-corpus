@@ -18,15 +18,13 @@
 (= (all) (match &a $x $x))
 
 (= (all $expr) (match &a $expr $expr))
-(= (all $expr) (match &a (=> $x $expr) $x)) ; needs actual chainer
+(= (all $expr) (match &a (=> $x $expr) $x))
 
 (= (all $expr $out) (match &a $expr $out))
 (= (all $expr $out) (all (match &a $expr $out)))
 
 ;; 3. find everything which implies $a
-(= (find-evidence-for $a) (
-  let $z (all ($a)) $z
-  ))
+(= (find-evidence-for $a) (all $a))
 
 (= (find-evidence-for $a) (
   let $z (all ($a)) (if (== $z ($a))
