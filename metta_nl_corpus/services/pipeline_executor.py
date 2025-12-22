@@ -16,6 +16,7 @@ from structlog import get_logger
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.services.defs.ingestion.assets import (
     cached_annotations,
+    cached_validations,
     preprocessed_training_data,
     raw_training_data,
 )
@@ -79,6 +80,7 @@ class PipelineExecutor:
         assets = [
             raw_training_data,
             cached_annotations,
+            cached_validations,
             preprocessed_training_data,
             data_annotations,
         ]
