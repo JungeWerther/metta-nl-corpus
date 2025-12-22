@@ -1,44 +1,28 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pandera.polars import DataFrameModel, Field
-from huggingface_hub import hf_hub_download
-
+import polars as pl
+from dagster import AssetExecutionContext, Config, asset
 from dagster._core.definitions.assets.definition.assets_definition import (
     AssetsDefinition,
 )
-from pandera.typing.common import UInt32
-import polars as pl
-from dagster import AssetExecutionContext, Config, asset
+from huggingface_hub import hf_hub_download
+from structlog import getLogger
 
-from metta_nl_corpus.constants import ANNOTATIONS_PATH
+from metta_nl_corpus.constants import ANNOTATIONS_PATH, VALIDATIONS_PATH
 from metta_nl_corpus.lib.caching import create_empty_parquet_from_schema_if_not_exists
 from metta_nl_corpus.lib.helpers import Always, Box, info, str_index, with_context
 from metta_nl_corpus.lib.interfaces import Fn
-from structlog import getLogger
+from metta_nl_corpus.models import (
+    Annotation,
+    RelationKind,
+    TrainingData,
+    Validation,
+)
 
 logger = getLogger(__name__)
 
-DATA_VERSION = "0.0.1"
 SUBSET_SIZE = 50
-
-
-class TrainingBase(DataFrameModel):
-    premise: str
-    hypothesis: str
-
-
-class TrainingData(TrainingBase):
-    label: int
-
-
-class Annotations(TrainingBase):
-    index: UInt32
-    label: str
-    metta_premise: str | None
-    metta_hypothesis: str | None
-    is_valid: bool
-    version: str = Field(default=DATA_VERSION)
 
 
 training_dataset_path = hf_hub_download(
@@ -56,18 +40,13 @@ class BaseConfig(Config):
 class Dataset(StrEnum):
     training_data = training_dataset_path
     annotations = str(ANNOTATIONS_PATH)
-
-
-class RelationKind(StrEnum):
-    ENTAILMENT = "entailment"
-    NEUTRAL = "neutral"
-    CONTRADICTION = "contradication"
-    NO_LABEL = "no_label"
+    validations = str(VALIDATIONS_PATH)
 
 
 DATASET_SCHEMAS = {
     Dataset.training_data: TrainingData,
-    Dataset.annotations: Annotations,
+    Dataset.annotations: Annotation,
+    Dataset.validations: Validation,
 }
 
 
@@ -124,6 +103,10 @@ raw_training_data = make_asset(
 
 cached_annotations = make_asset(
     "cached_annotations", load_annotations_from_path, Dataset.annotations
+)
+
+cached_validations = make_asset(
+    "cached_validations", load_parquet_from_path, Dataset.validations
 )
 
 

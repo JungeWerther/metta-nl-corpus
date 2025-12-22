@@ -1,13 +1,15 @@
-from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import NamedTuple, Optional, cast
+from datetime import datetime
+from pathlib import Path
+from typing import Any, cast
+from uuid import uuid4
 
 import ollama
 import polars as pl
 from dagster import asset
 from dotenv import load_dotenv
-from huggingface_hub.utils import tqdm
+from huggingface_hub.utils.tqdm import tqdm
 from hyperon import MeTTa
 from openai import OpenAI
 from openai.types.chat.chat_completion_system_message_param import (
@@ -22,19 +24,28 @@ from metta_nl_corpus.constants import (
     ANNOTATION_GUIDELINE_PATH,
     ANNOTATIONS_PATH,
     PROJECT_ROOT,
+    VALIDATIONS_PATH,
 )
 from metta_nl_corpus.lib.interfaces import Fn
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
-from metta_nl_corpus.services.defs.ingestion.assets import (
+from metta_nl_corpus.lib.space_versioning import get_space_version
+from metta_nl_corpus.models import (
     DATA_VERSION,
-    Annotations,
+    Annotation,
+    GenerateAndValidateResult,
+    GenerationFailureReason,
+    GenerationResult,
     RelationKind,
     TrainingData,
+    Validation,
 )
 
 logger = getLogger(__name__)
 
 load_dotenv(".env.local")
+
+# adding inference_mode here to block retry when not validated; for now, track all generations untill MeTTa algorithm is more sophisticated
+INFERENCE_MODE = False
 
 PREMISE_PROMPT_TEMPLATE = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{premise}". Return only valid MeTTa expressions with no comments. {additional_context}'
 HYPOTHESIS_PROMPT_TEMPLATE = """
@@ -46,15 +57,17 @@ ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE = """
 The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} metta_premise={last_metta_premise} metta_hypothesis={last_metta_hypothesis}
 """
 
+ENTAILMENTS_PATH = PROJECT_ROOT / "metta_nl_corpus/services/spaces/inference.metta"
+CONTRADICTIONS_PATH = (
+    PROJECT_ROOT / "metta_nl_corpus/services/spaces/contradictions.metta"
+)
 
-class GenerationFailureReason(StrEnum):
-    NO_CONTENT = "no_content"
-    EMPTY_EXPRESSION = "empty_expression"
 
-
-class GenerationResult(NamedTuple):
-    expression: str | None
-    failure_reason: GenerationFailureReason | None
+def pandera_record(d: dict[Any, Any]) -> pl.DataFrame:
+    """Convert a dictionary to a single-row Polars DataFrame for pandera validation."""
+    # Convert all keys to strings and create a single-row DataFrame
+    str_dict = {str(k): [v] for k, v in d.items()}
+    return pl.DataFrame(str_dict)
 
 
 @dataclass
@@ -134,38 +147,33 @@ def extract_metta_expression(content: str | None) -> GenerationResult:
     return GenerationResult(expression=trimmed, failure_reason=None)
 
 
-def validate_expressions_are_contradictory(
-    metta_premise: Optional[str], metta_hypothesis: Optional[str]
+def validate_expressions_truthy_after_adding_expressions_to_space(
+    expressions_to_add_to_space: Sequence[str],
+    grounding_space_path: Path,
+    expression_to_evaluate: str,
 ) -> bool:
-    if not metta_premise or not metta_hypothesis:
+    if not expressions_to_add_to_space:
         return False
 
     try:
         runner = MeTTa()
 
-        # Load background knowledge
-        contradictions_path = (
-            PROJECT_ROOT / "metta_nl_corpus/services/spaces/contradictions.metta"
-        )
-
         # Read the file content
-        with open(contradictions_path, "r") as f:
+        with open(grounding_space_path, "r") as f:
             metta_code = f.read()
 
         runner.run(metta_code)
 
         # Run premise and hypothesis
-        if metta_premise:
-            runner.run(metta_premise)
-        if metta_hypothesis:
-            runner.run(metta_hypothesis)
+        for expression in expressions_to_add_to_space:
+            runner.run(expression)
 
         # Check for intersection between truth and falsity spaces
-        result = runner.run("!(match &truth $x (match &falsity $x True))")
+        result = runner.run(expression_to_evaluate)
         logger.info("MeTTa validation result", result=result)
 
         # result is a list of results (atoms)
-        if result and len(result) > 0 and len(result[0]) > 0:
+        if result and len(result) > 0 and len(result[-1]) > 0:
             logger.info(
                 "MeTTa expressions are contradictory",
             )
@@ -181,27 +189,99 @@ def validate_expressions_are_contradictory(
     return False
 
 
+def validate_expressions_are_entailing(
+    metta_premise: str, metta_hypothesis: str
+) -> bool:
+    pass
+    # Load background knowledge
+    expression_to_evaluate = f"!(find-evidence-for {metta_hypothesis})"
+    return validate_expressions_truthy_after_adding_expressions_to_space(
+        [
+            f"!(add-proposition {metta_premise})",
+        ],
+        ENTAILMENTS_PATH,
+        expression_to_evaluate,
+    )
+
+
+def validate_expressions_are_contradictory(
+    metta_premise: str, metta_hypothesis: str
+) -> bool:
+    pass
+    # Load background knowledge
+    expression_to_evaluate = "!(match &truth $x (match &falsity $x True))"
+    return validate_expressions_truthy_after_adding_expressions_to_space(
+        [metta_premise, metta_hypothesis], CONTRADICTIONS_PATH, expression_to_evaluate
+    )
+
+
+def validate_expressions_are_neutral(metta_premise: str, metta_hypothesis: str) -> bool:
+    return not (
+        validate_expressions_are_entailing(metta_premise, metta_hypothesis)
+        or validate_expressions_are_contradictory(metta_premise, metta_hypothesis)
+    )
+
+
+def validate_expressions_by_label(
+    label: RelationKind, metta_premise: str, metta_hypothesis: str
+) -> bool:
+    validation_function = {
+        RelationKind.ENTAILMENT: validate_expressions_are_entailing,
+        RelationKind.CONTRADICTION: validate_expressions_are_contradictory,
+        RelationKind.NEUTRAL: validate_expressions_are_neutral,
+    }[label]
+
+    return validation_function(metta_premise, metta_hypothesis)
+
+
+def get_grounding_space_versions():
+    contradictions_git_hash, contradictions_code_hash = get_space_version(
+        CONTRADICTIONS_PATH
+    )
+    entailments_git_hash, entailments_code_hash = get_space_version(ENTAILMENTS_PATH)
+
+    return (
+        contradictions_code_hash,
+        contradictions_git_hash,
+        entailments_code_hash,
+        entailments_git_hash,
+    )
+
+
+(
+    CONTRADICTIONS_SPACE_HASH,
+    CONTRADICTIONS_GIT_HASH,
+    ENTAILMENT_SPACE_HASH,
+    ENTAILMENT_GIT_HASH,
+) = get_grounding_space_versions()
+
+
 def generate_and_validate(
     premise: str,
     hypothesis: str,
-    label: str,
+    label: RelationKind,
+    index: int,
     annotation_model: str,
     max_attempts: int = 3,
-) -> tuple[str | None, str | None, bool]:
+) -> GenerateAndValidateResult:
     """
     Generate MeTTa expressions for premise and hypothesis, validate them,
     and retry with additional context if validation fails.
 
     Returns:
-        tuple[str | None, str | None, bool]: (metta_premise, metta_hypothesis, is_valid)
+        GenerateAndValidateResult containing annotation and validation data
     """
-    additional_context = None
-    last_metta_premise = None
-    last_metta_hypothesis = None
+    additional_context = ""
+    last_metta_premise = ""
+    last_metta_hypothesis = ""
+    final_premise_prompt = ""
+    final_hypothesis_prompt = ""
 
-    agent = LLMAgent(
-        model=annotation_model, system_prompt=ANNOTATION_GUIDELINE_PATH.read_text()
-    )
+    # Generate unique ID for this annotation
+    annotation_id = str(uuid4())
+
+    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
+    agent = LLMAgent(model=annotation_model, system_prompt=system_prompt)
 
     for attempt in range(max_attempts):
         logger.info(
@@ -234,6 +314,11 @@ def generate_and_validate(
 
         last_metta_premise = metta_premise_result.expression
         last_metta_hypothesis = metta_hypothesis_result.expression
+        if not last_metta_hypothesis:
+            logger.error(
+                f"Failed to generate MeTTa expression for hypothesis {hypothesis}"
+            )
+            continue
 
         logger.info(
             "Generated MeTTa expressions for premise and hypothesis",
@@ -243,34 +328,79 @@ def generate_and_validate(
             metta_hypothesis=last_metta_hypothesis,
         )
 
-        if (
-            validate_expressions_are_contradictory(
-                last_metta_premise, last_metta_hypothesis
+        if INFERENCE_MODE:
+            # Validate if contradiction label
+            is_valid = validate_expressions_by_label(
+                label=label,
+                metta_premise=last_metta_premise,
+                metta_hypothesis=last_metta_hypothesis,
             )
-            and label == RelationKind.CONTRADICTION
-            or label != RelationKind.CONTRADICTION
-        ):
-            return (last_metta_premise, last_metta_hypothesis, True)
 
-        # If validation failed, generate again with additional context
-        additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
-            premise=premise,
-            hypothesis=hypothesis,
-            last_metta_premise=last_metta_premise,
-            last_metta_hypothesis=last_metta_hypothesis,
+            # If validation failed, generate again with additional context
+            additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
+                premise=premise,
+                hypothesis=hypothesis,
+                last_metta_premise=last_metta_premise,
+                last_metta_hypothesis=last_metta_hypothesis,
+            )
+        else:
+            break
+
+    if not last_metta_premise or not last_metta_hypothesis:
+        return GenerateAndValidateResult(annotation=None, validation=None)
+
+    # Create annotation dict
+    annotation = Annotation.validate(
+        pandera_record(
+            {
+                Annotation.annotation_id: annotation_id,
+                Annotation.index: index,
+                Annotation.premise: premise,
+                Annotation.hypothesis: hypothesis,
+                Annotation.label: label,
+                Annotation.metta_premise: last_metta_premise,
+                Annotation.metta_hypothesis: last_metta_hypothesis,
+                Annotation.generation_model: annotation_model,
+                Annotation.system_prompt: system_prompt,
+                Annotation.metta_premise_prompt: final_premise_prompt,
+                Annotation.metta_hypothesis_prompt: final_hypothesis_prompt,
+                Annotation.version: DATA_VERSION,
+            }
         )
+    )
 
-    # Return the last generated expressions even if validation failed
-    return (last_metta_premise, last_metta_hypothesis, False)
+    is_valid = validate_expressions_by_label(
+        label=label,
+        metta_premise=last_metta_premise,
+        metta_hypothesis=last_metta_hypothesis,
+    )
+
+    validation = Validation.validate(
+        pandera_record(
+            {
+                Validation.validation_id: str(uuid4()),
+                Validation.annotation_id: annotation_id,
+                Validation.is_valid: is_valid,
+                Validation.relation_kind: label,  # The relation being validated
+                Validation.entailment_space_hash: ENTAILMENT_SPACE_HASH,
+                Validation.entailment_git_commit_hash: ENTAILMENT_GIT_HASH,
+                Validation.contradiction_space_hash: CONTRADICTIONS_SPACE_HASH,
+                Validation.contradiction_git_commit_hash: CONTRADICTIONS_GIT_HASH,
+                Validation.validation_timestamp: datetime.now().isoformat(),
+            }
+        )
+    )
+
+    return GenerateAndValidateResult(annotation=annotation, validation=validation)
 
 
 def process_in_batches(
     rows: list[dict],
-    process_fn: Fn[dict, Mapping],
+    process_fn: Fn[dict, GenerateAndValidateResult],
     subset_size: int,
     batch_size: int,
     description: str = "Processing",
-) -> list[dict]:
+) -> Sequence[GenerateAndValidateResult]:
     """
     Process rows in batches with progress tracking.
 
@@ -286,7 +416,7 @@ def process_in_batches(
     """
     # Limit to subset_size
     rows_to_process = rows[:subset_size]
-    processed_rows = []
+    processed_rows: Sequence[GenerateAndValidateResult] = []
 
     # Process in batches with tqdm
     for i in tqdm(
@@ -307,21 +437,27 @@ def data_annotations(
     context,
     preprocessed_training_data: pl.DataFrame,
     cached_annotations: pl.DataFrame,
-) -> pl.DataFrame:
+    cached_validations: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """
+    Generate MeTTa annotations and validations for training data.
+
+    Returns:
+        Tuple of (annotations_df, validations_df)
+    """
     pipeline_config: PipelineRunConfig = context.resources.pipeline_config
 
     logger.info("Starting data annotation", pipeline_config=pipeline_config)
 
     # Get indices not in preprocessed training data
     unannotated_data_points = preprocessed_training_data.filter(
-        ~pl.col(str(Annotations.index)).is_in(
-            cached_annotations[str(Annotations.index)]
-        )
+        ~pl.col(str(Annotation.index)).is_in(cached_annotations[str(Annotation.index)])
     )
 
-    # Extract premise and hypothesis columns into a simple dataset
-    premise_hypothesis_dataset = unannotated_data_points.select(
+    # Extract premise, hypothesis, and label columns with index
+    dataset_to_annotate = unannotated_data_points.select(
         [
+            pl.col(str(Annotation.index)),
             pl.col(str(TrainingData.premise)),
             pl.col(str(TrainingData.hypothesis)),
             pl.col(str(TrainingData.label)),
@@ -329,57 +465,75 @@ def data_annotations(
     )
 
     # Apply generate_and_validate to all rows
-    def process_row(row: dict) -> dict:
+    def process_row(row: dict) -> GenerateAndValidateResult:
         premise = row[str(TrainingData.premise)]
         hypothesis = row[str(TrainingData.hypothesis)]
         label = row[str(TrainingData.label)]
-        metta_premise, metta_hypothesis, is_valid = generate_and_validate(
-            premise,
-            hypothesis,
-            label,
+        index = row["index"]
+
+        return generate_and_validate(
+            premise=premise,
+            hypothesis=hypothesis,
+            label=label,
+            index=index,
             annotation_model=pipeline_config.annotation_model,
         )
-        return {
-            str(Annotations.metta_premise): metta_premise,
-            str(Annotations.metta_hypothesis): metta_hypothesis,
-            str(Annotations.is_valid): is_valid,
-        }
 
-    rows = premise_hypothesis_dataset.to_dicts()
-    processed_rows = process_in_batches(
+    rows = dataset_to_annotate.to_dicts()
+    processed_results = process_in_batches(
         rows=rows,
         process_fn=process_row,
         subset_size=pipeline_config.subset_size,
         batch_size=pipeline_config.batch_size,
         description="Generating MeTTa annotations",
     )
-    generated_results = pl.DataFrame(
-        processed_rows,
-        schema={
-            str(Annotations.metta_premise): pl.String,
-            str(Annotations.metta_hypothesis): pl.String,
-            str(Annotations.is_valid): pl.Boolean,
-        },
+
+    # Separate annotations and validations
+    annotations_list = [
+        result.annotation
+        for result in processed_results
+        if result.annotation is not None
+    ]
+    validations_list = [
+        result.validation
+        for result in processed_results
+        if result.validation is not None
+    ]
+
+    # Create DataFrames by concatenating
+    new_annotations = (
+        pl.concat(annotations_list, how="vertical")
+        if annotations_list
+        else pl.DataFrame()
+    )
+    new_validations = (
+        pl.concat(validations_list, how="vertical")
+        if validations_list
+        else pl.DataFrame()
     )
 
-    # Add the generated columns to the annotated_data_points dataset
-    annotated_data_points = (
-        unannotated_data_points.head(pipeline_config.subset_size).with_columns(
-            [
-                generated_results[str(Annotations.metta_premise)],
-                generated_results[str(Annotations.metta_hypothesis)],
-                generated_results[str(Annotations.is_valid)],
-                pl.lit(DATA_VERSION).alias(Annotations.version),
-            ]
-        )
-        # We no longer drop nulls because we want to keep invalid annotations
-        # But we might want to filter out rows where generation completely failed (if both are null)?
-        # For now, keeping everything as requested by "outputs are stored even if they don't produce a validated output"
+    # Combine with cached data
+    all_annotations = (
+        pl.concat([cached_annotations, new_annotations], how="align")
+        if len(cached_annotations)
+        else new_annotations
     )
 
-    versioned_data = Annotations.validate(annotated_data_points)
-    new_result = pl.concat([cached_annotations, versioned_data], how="align")
+    all_validations = (
+        pl.concat([cached_validations, new_validations], how="align")
+        if len(cached_validations)
+        else new_validations
+    )
 
-    new_result.write_parquet(ANNOTATIONS_PATH)
+    # Write to disk
+    all_annotations.write_parquet(ANNOTATIONS_PATH)
+    if not all_validations.is_empty():
+        all_validations.write_parquet(VALIDATIONS_PATH)
 
-    return new_result
+    logger.info(
+        "Completed data annotation",
+        annotations_count=len(all_annotations),
+        validations_count=len(all_validations),
+    )
+
+    return all_annotations, all_validations
