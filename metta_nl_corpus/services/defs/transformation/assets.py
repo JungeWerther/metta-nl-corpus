@@ -1,14 +1,21 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, cast
 
+import ollama
 import polars as pl
 from dagster import asset
 from dotenv import load_dotenv
 from huggingface_hub.utils import tqdm
 from hyperon import MeTTa
-from ollama import chat
 from openai import OpenAI
+from openai.types.chat.chat_completion_system_message_param import (
+    ChatCompletionSystemMessageParam,
+)
+from openai.types.chat.chat_completion_user_message_param import (
+    ChatCompletionUserMessageParam,
+)
 from structlog import getLogger
 
 from metta_nl_corpus.constants import (
@@ -21,13 +28,23 @@ from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.services.defs.ingestion.assets import (
     DATA_VERSION,
     Annotations,
-    TrainingData,
     RelationKind,
+    TrainingData,
 )
 
 logger = getLogger(__name__)
 
 load_dotenv(".env.local")
+
+PREMISE_PROMPT_TEMPLATE = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{premise}". Return only valid MeTTa expressions with no comments. {additional_context}'
+HYPOTHESIS_PROMPT_TEMPLATE = """
+Previously we processed the premise: {premise} and generated the following MeTTa expression: {metta_premise_result}.
+Now we need to process the hypothesis: {hypothesis} and generate a MeTTa expression that can be validated as a contradiction or
+not a contradiction with the previously generated MeTTa expression. {additional_context}
+"""
+ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE = """
+The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} metta_premise={last_metta_premise} metta_hypothesis={last_metta_hypothesis}
+"""
 
 
 class GenerationFailureReason(StrEnum):
@@ -38,6 +55,56 @@ class GenerationFailureReason(StrEnum):
 class GenerationResult(NamedTuple):
     expression: str | None
     failure_reason: GenerationFailureReason | None
+
+
+@dataclass
+class LLMAgent:
+    model: str
+    system_prompt: str
+
+    @property
+    def _model_is_openai(self):
+        return self.model.startswith(("gpt", "o1"))
+
+    @property
+    def message_history(self) -> list[ChatCompletionSystemMessageParam]:
+        return [{"role": "system", "content": self.system_prompt}]
+
+    def _run_openai(self, prompt: str):
+        assert self._model_is_openai
+
+        client = OpenAI()  # Uses OPENAI_API_KEY env var
+        result = client.chat.completions.create(
+            model=self.model,
+            messages=self.message_history
+            + cast(
+                list[ChatCompletionUserMessageParam],
+                [{"role": "user", "content": prompt}],
+            ),
+        )
+        return result.choices[0].message.content
+
+    def _run_ollama(self, prompt: str):
+        assert not self._model_is_openai
+
+        result = ollama.chat(
+            model=self.model,
+            messages=self.message_history + [{"role": "user", "content": prompt}],
+        )
+        return result.message.content
+
+    def run(self, user_prompt) -> GenerationResult:
+        generate_fn = self._run_openai if self._model_is_openai else self._run_ollama
+
+        try:
+            content = generate_fn(user_prompt)
+            logger.info("Generated LLM response", content=content)
+            return extract_metta_expression(content)
+        except Exception as e:
+            logger.error("OpenAI generation failed", error=str(e))
+            return GenerationResult(
+                expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
+            )
 
 
 def parse_metta_expression(expression: str) -> str:
@@ -65,63 +132,6 @@ def extract_metta_expression(content: str | None) -> GenerationResult:
         )
 
     return GenerationResult(expression=trimmed, failure_reason=None)
-
-
-def openai_generate_from_template(
-    text: str, model: str, additional_context: str | None = None
-) -> GenerationResult:
-    user_content: str = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
-        text=text
-    )
-
-    if additional_context:
-        user_content = f"{user_content}\n\n{additional_context}"
-
-    try:
-        client = OpenAI()  # Uses OPENAI_API_KEY env var
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": ANNOTATION_GUIDELINE_PATH.read_text()},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        content = response.choices[0].message.content
-    except Exception as e:
-        logger.error("OpenAI generation failed", error=str(e))
-        return GenerationResult(
-            expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
-        )
-
-    logger.info("Generated LLM response", content=content)
-    return extract_metta_expression(content)
-
-
-def ollama_generate_from_template(
-    text: str, model: str, additional_context: str | None = None
-) -> GenerationResult:
-    user_content: str = 'Turn the following statement into MeTTa expressions that represents the same meaning: "{text}". Return only valid MeTTa expressions with no comments.'.format(
-        text=text
-    )
-
-    if additional_context:
-        user_content = f"{user_content}\n\n{additional_context}"
-
-    response = chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": ANNOTATION_GUIDELINE_PATH.read_text()},
-            {
-                "role": "user",
-                "content": user_content,
-            },
-        ],
-    )
-
-    content: str | None = response.message.content
-
-    logger.info("Generated LLM response", content=content)
-    return extract_metta_expression(content)
 
 
 def validate_expressions_are_contradictory(
@@ -189,9 +199,8 @@ def generate_and_validate(
     last_metta_premise = None
     last_metta_hypothesis = None
 
-    is_openai = annotation_model.startswith(("gpt", "o1"))
-    generate_fn = (
-        openai_generate_from_template if is_openai else ollama_generate_from_template
+    agent = LLMAgent(
+        model=annotation_model, system_prompt=ANNOTATION_GUIDELINE_PATH.read_text()
     )
 
     for attempt in range(max_attempts):
@@ -199,9 +208,13 @@ def generate_and_validate(
             f"Generating MeTTa expressions (attempt {attempt})", model=annotation_model
         )
 
-        metta_premise_result = generate_fn(
-            premise, annotation_model, additional_context
+        metta_premise_prompt = PREMISE_PROMPT_TEMPLATE.format(
+            premise=premise,
+            additional_context=additional_context,
         )
+
+        metta_premise_result = agent.run(metta_premise_prompt)
+
         if not metta_premise_result.expression:
             logger.error(
                 "Failed to generate MeTTa expression for premise",
@@ -210,16 +223,14 @@ def generate_and_validate(
             )
             continue
 
-        metta_hypothesis_context = f"""
-        Previously we processed the premise: {premise=} and generated the following MeTTa expression: {metta_premise_result.expression}.
-        Now we need to process the hypothesis: {hypothesis=} and generate a MeTTa expression that can be validated as a contradiction or
-        not a contradiction with the previously generated MeTTa expression.
-        """
-        if additional_context:
-            metta_hypothesis_context += f"\n\n{additional_context}"
-        metta_hypothesis_result = generate_fn(
-            hypothesis, annotation_model, metta_hypothesis_context
+        metta_hypothesis_prompt = HYPOTHESIS_PROMPT_TEMPLATE.format(
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise_result=metta_premise_result.expression,
+            additional_context=additional_context,
         )
+
+        metta_hypothesis_result = agent.run(metta_hypothesis_prompt)
 
         last_metta_premise = metta_premise_result.expression
         last_metta_hypothesis = metta_hypothesis_result.expression
@@ -242,7 +253,12 @@ def generate_and_validate(
             return (last_metta_premise, last_metta_hypothesis, True)
 
         # If validation failed, generate again with additional context
-        additional_context = f"The previous result was not a contradiction as expected. Please ensure the generated MeTTa expressions represent a contradiction. Here are the previous results: {premise=} {hypothesis=} metta_premise={last_metta_premise} metta_hypothesis={last_metta_hypothesis}"
+        additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
+            premise=premise,
+            hypothesis=hypothesis,
+            last_metta_premise=last_metta_premise,
+            last_metta_hypothesis=last_metta_hypothesis,
+        )
 
     # Return the last generated expressions even if validation failed
     return (last_metta_premise, last_metta_hypothesis, False)
