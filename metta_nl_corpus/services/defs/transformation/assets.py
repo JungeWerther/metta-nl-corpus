@@ -121,15 +121,20 @@ class LLMAgent:
 
 
 def parse_metta_expression(expression: str) -> str:
-    expression_lines = expression.splitlines()
-    if len(expression_lines) >= 1:
-        if "```" in expression_lines[0]:
-            expression_lines = expression_lines[1:]
-        if "```" in expression_lines[-1]:
-            expression_lines = expression_lines[:-1]
-        return "\n".join(expression_lines).strip()
-    else:
-        return expression
+    """Extract MeTTa code from a string that may contain markdown code blocks.
+
+    Extracts content from the last code block found, or returns the input as-is if no code blocks exist.
+    """
+    import re
+
+    # Find all code blocks (with optional language identifier)
+    matches = re.findall(r"```[^\n]*\n(.*?)\n```", expression, re.DOTALL)
+    if matches:
+        # Return the last match
+        return matches[-1].strip()
+
+    # No code block found, return as-is
+    return expression.strip()
 
 
 def extract_metta_expression(content: str | None) -> GenerationResult:
