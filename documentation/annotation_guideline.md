@@ -6,38 +6,21 @@ This is a basic guideline outlining some principles for the conversion of natura
 ## Basics
 Recall that an s-expression is any expression of the form `(x1 x2 ... xn)` where `x_i` can be replaced with an arbitrary value, which may itself be an s-expression. Any such expression is refered to here as an `Atom`.
 
-In MeTTa, the keyword `:` has a special meaning, namely to assign a __type__ to some keyword. For example, considering that "socrates is an instance of a Human" I could write
+In MeTTa, we take the convention that predication is the same as assigning an object to a class. For example, if we want to express that "Socrates is human", we can write:
 
-```lisp
-(: Socrates Human)
+```MeTTa
+(human Socrates)
 ```
 
 Let's say I wanted to make a basic assertion, or "predicate" something about an Atom. For example, imagine I wanted to say that "Socrates has black hair".
 One way of expressing this in MeTTa would be so assign the property of "blackhairedness" to `Socrates`:
 
-```lisp
+```MeTTa
 ; (Predicate Object)
-(hasBlackHair Socrates)
-```
+(blackHaired Socrates)
 
-Here we've invented a _unary_ (= taking one argument) predicate "hasBlackHair". You can think of it as a _function_ that takes some object, and produces either a new Atom, or a Boolean value, depending on how you look at it and what you want to do.
-If we were to assign a type to "hasBlackHair", we could write it as follows:
-
-```
-; traditionally
-(: hasBlackHair (-> Object Bool))
-
-; in our convention
-(: hasBlackHair (-> Object Atom))
-```
-
-But wait a second! What if we wanted to compare the hair colour of different humans. At the face of it, "blackHairedNess" has nothing to do with "blondHairedNess"!
-
-Luckily, we can even make it more granular, by imagining a _binary_ predicate "hasHairColour" that takes an Object and a Colour, to produce the same meaning.
-
-```
-(: hasHairColour (-> Object Colour Atom))
-(hasHairColour Socrates Black)
+; equivalently:
+(=> (Socrates) (blackHaired))
 ```
 
 __Both expressions are valid!__
@@ -47,138 +30,82 @@ __Both expressions are valid!__
 In the case of Socrates, it's pretty obvious who we're talking about. Socrates can only have one meaning, because it's not only a _name_, and we all know who we're talking about. So two statements mentioning Socrates are probably talking about the same person.
 Generally speaking though, it won't be possible to make such assignations.
 
-Consider the sentence "The woman in white". How would we express this? There are no assertions being made here, but the sentence is certainly not devoid of meaning.
-Furthermore, compare this with the sentence "A woman in white". The meaning of these two sentences could not be more different, especially when used within a _context_.
+Before representing expressions in MeTTa, always think about whether we're talking about a particular or a general concept.
 
-So, if you had the intuition to represent this concept like
-```lisp
-(: woman Human)
-(dressedInWhite woman)
+**Rule of thumb**: Whenever we're talking about a particular, we give a name prefixed with _this_. For example:
+
+When asked to represent "a woman walks in the park. There are no women in the park". Write:
+
+```MeTTa
+(woman a-woman) ; "a-woman is a woman"
+(not (inThePark woman)) ; "for all women x there is no x which has the property of being in the park"
 ```
 
-then this would almost certainly lead to problems down the line!
+**IMPORTANT**: Always add as many expressions as you like to capture all the concepts.
 
-Another thing: when I'm talking about "__the__ woman" (definite case), I almost always need to refer to some _context_ if I were to want to answer the very natural question: "__which__ woman?".
+Examples:
 
-This means that objects with a definite article are _reflexive_ in the sense that their _reference_ or _name_ should be infered from the _context_. Since the reference of such (reflexive) phrases should be determined after the fact, we opt to defer assignation of the referent to a name. We write:
-
-```lisp
-(the (: $x Woman) (dressedIn $x white))
-```
-
-Notice the `$` before `$x`. Here, this means that `$x` is a locally scoped variable. This will have advantages down the line,
-but for the purposes of this project, do not worry about the implementation of `the`.
-
-Some examples:
-
-```lisp
+```MeTTa
 ; the cat jumped off the roof
-(the (: $x Cat) (jumpedOff $x (the (: $y Roof) ())))
+(cat the-cat) ; being a cat is a property of the-cat
+(jumpedOffRoof the-cat)
 
 ; some elephant in the room
-(some (: $x Elephant) (isIn $x (the (: $y Room) ()))))
+(elephant some-elephant)
+(inTheRoom some-elephant)
 
 ; I knew that John was angry
-(knew I (felt John angry))
+(=> (John) (human)) ; same as (human John)
+(=> myKnowledge (angry John))
 
 ; it was a day to remember
-(the (: $x Day) (wasMemorable $x))
+(day the-day) ; the-day is a day
+(wasMemorable the-day) ; wasMemorable is a property of the-day
 
 ; a blue wizard appeared suddenly
-(appearedSuddenly (a (: $z Wizard) (hasColour $z blue)))
+(wizard a-wizard)
+(blue wizard)
+(suddenlyAppeared wizard)
 ```
 
 Some notes:
-- "the" and "this" almost always carry the same meaning. Even though it'll be possible to use them interchangably in most cases, let's use them in the way they are mentioned.
-- same for "a" and "some"
-- let's agree to place the object before the attribute in binary predicates: `(hasColour John green)` over `(hasColour green John)`
-- try to make predicates as granular as possible! `(isColour John yellow)` is more meaningful than `(isYellow John)`.
-- there are multiple correct answers
-- words that are implicitly reflexive, like 'I' or 'this' (when used as a proper noun) can be represented as-is (because they will get an explicit definition down the line)
+- whenever multiple properties are mentioned, simply add them as separate Atom expressions
 
 ## Quantification, negation, products
 
-Great! What about sentences like "all swans are white" or "there exists a black swan"? We handle them just in the same way as before, but let's agree to use two special keywords `exists` and `forall` to represent existential and universal quantification, accordingly:
+Great! What about sentences like "all swans are white" or "there exists a black swan"? We handle them just in the same way as before. But we simply add the predicates the generic class!
 
-```lisp
+```MeTTa
 ; all swans are white
-(forall (: $x Swan) (hasColour $x white))
+(=> (swan) (white))
 
 ; there exists a black swan
-(exists (: $x Swan) (hasColour $x black))
+(swan some-swan) ; being a swan is a property of some-swan
+(exists some-swan)
+(black some-swan)
 ```
 
 Also, when we're dealing with a negation, let's represent it with the keyword `not`:
 
-```lisp
+```MeTTa
 ; there is not a hair on my head that considers this
-(not (exists (: $x Hair) (, (isOn $x myHead) (considers $x this))))
+(hair hair-on-my-head) ; hair-on-my-head is a hair
+(on-my-head hair-on-my-head) ; hair-on-my-head is on my head
+(not (considers-this hair-on-my-head))
 
 ; it's also fine to present a synonym, when dealing with expressions
-(stronglyDisconsider I this)
+(not-considered-by-me this)
 ```
 
-Hey! what is the `,` doing there? Well, in the Curry-Howard correspondence, the connective `and` in logic corresponds to the product-type! So it should be possible to use `,` and `and` interchangeably.
-
-```lisp
+```MeTTa
 ; Kayley's head is blue and red
-(, (hasColour (headOf Kayley) blue) (hasColour (headOf Kayley) red))
 
-; (equivalent)
-(and (hasBlueHead Kayley) (hasRedHead Kayley))
+(woman kayley)
+(blue-head kayley)
+(red-head kayley)
 
-; (equivalent, better)
-(the (: $x Human) (
-  and (hasName $x Kayley) (
-  and (hasColour (headOf $x) blue)
-      (hasColour (headOf $x) red)
-  )))
+; equivalent:
+(, (blue-head kayley) (red-head kayley))
 ```
 
-Some rules:
-- Let's agree that `and` and `or` always take two arguments. Use nesting (like a `List` datastructure) if you need to chain connectives.
-- `,` can be used instead of `and`, while `+` is equivalent to `or`. Let's prefer to use `and` and `or` for readibility.
-
-### PLN logic
-<under construction>
-
-- all represented as types
-
-```lisp
-;; The temple was in Kathmendu.
-
-(: LocatedIn (-> Object Object Type))
-(: Tense (-> Type String Type))
-(: Temple (-> Object Type))
-(: Name (-> Object String Type))
-(: t Object)
-(: k Object)
-(: t_temple (Temple t))
-(: k_name (Name k "Kathmandu"))
-(: loc_t_k (LocatedIn t k))
-(: tense_loc_the_t_k (Tense loc_t_k "past"))``
-
-```
-- dependent sums as existential quantifiers
-
-```
-;; Every girl has a phone.
-
-(: Girl (-> Object Type))
-(: Phone (-> Object Type))
-(: g_has_h
-   (-> (: $prf (Girl $g))
-       (Σ (: $p Object)
-          (* (: $pprf (Phone $p))
-             (: $hprf (Has $g $p))))))
-```
-
-Higher kinded predicates as type modifiers
-```
-;; Upper dermis
-
-(: Upper (-> (-> Object Type) (-> Object Type)))
-(: Dermis (-> Object Type))
-(: ud Object)
-(: ud_upper_dermis ((Upper Dermis) ud))
-```
+When generating a MeTTa expression, always wrap your final result in a single MeTTa code block: ```MeTTa\n```.
