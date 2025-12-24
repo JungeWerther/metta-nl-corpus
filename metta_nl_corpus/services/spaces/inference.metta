@@ -24,18 +24,52 @@
 (= (all $expr $out) (all (match &a $expr $out)))
 
 ;; 3. find everything which implies $a
-(= (find-evidence-for $a) (all $a))
+(= (find-evidence-for $to-prove) (match &a $to-prove $to-prove))
+(= (find-evidence-for $to-prove) (=>
+  (let $hypothesis (match &a (=> $x $to-prove) $x)
+    ;; (let $z
+      (find-evidence-for $hypothesis)
+      ;; (if (== $z $hypothesis) (OBSERVING $hypothesis)
+       ;; () ;; (=> $z (B $to-prove))
+        ;; )
+  )
+  ;; )
+  $to-prove
+))
+(= (find-evidence-for (, $x $y)) (, (find-evidence-for $x) (find-evidence-for $y)))
 
-(= (find-evidence-for $a) (
-  let $z (all ($a)) (if (== $z ($a))
-  ()
-  (find-evidence-for (car-atom $z))
-  )))
+;; (= (find-evidence-for $a) (
+;;   let $z (all ($a)) (if (== $z ($a))
+;;   ()
+;;   (find-evidence-for (car-atom $z))
+;;   )))
+
+;; (= (find-evidence-for $a) (let $z (all ($a)) (unify ;; faulty still
+;;    ;; IF p1 and p2 together imply $A ...
+;;     (,
+;;       (=> (find-evidence-for $p1) $a)
+;;       $p2
+;;     )
+;;     $z
+;;     (TEST $p1 $p2) ;; return TEST $a for now
+;;     () ;; otherwise NOP
+;; )))
+
+;; (= (find-evidence-for $a) (let $z (all ($a)) (unify
+;;    ;; IF p1 and p2 together imply $A ...
+;;     (,
+;;       $p1
+;;       (=> (find-evidence-for $p2) $a)
+;;     )
+;;     $z
+;;     (TEST $p1 $p2) ;; return TEST $a for now
+;;     () ;; otherwise NOP
+;; )))
 
 ;; 4. adding propositions
 (= (add-proposition $x) (add-atom &a $x)) ; do we really need the base atom, or only its relations?
-(= (add-proposition ($attr $ob)) (add-atom &a (=> ($ob) ($attr))))
-(= (add-proposition $attr $ob) (add-atom &a (=> $ob $attr)))
+(= (add-proposition ($attr $ob)) (add-atom &a (=> ($ob $x) ($attr $x))))
+;; (= (add-proposition $attr $ob) (add-atom &a (=> $ob $attr)))
 
 ;; 5. find everything which follows from $a
 (= (deduce-from $a) (match &a (=> ($a) $b) $b))
@@ -46,8 +80,25 @@
 (= (entails-contradication? $proposition)
   (let $conclusion0 (deduce-from $proposition)
     (let $conclusion1 (deduce-from $proposition)
-      (if (== $conclusion0 (~ (car-atom $conclusion1)))
+      (if (== $conclusion0 (not (car-atom $conclusion1)))
         (=> $proposition (, $conclusion0 $conclusion1))
         ()
       )
   )))
+
+;; !(add-proposition ( ; not needed anymore
+;;   (=> $A $C)
+;;   (,
+;;     (=> $A $B)
+;;     (=> $B $C)
+;;     )
+;;   ))
+
+
+!(add-proposition (=>
+  (,
+    ($a $x)
+    ((not $a) $x)
+  )
+  ⊥
+))
