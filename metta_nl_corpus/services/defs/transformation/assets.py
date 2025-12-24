@@ -214,7 +214,7 @@ def validate_expressions_are_contradictory(
 ) -> bool:
     pass
     # Load background knowledge
-    expression_to_evaluate = "!(match &truth $x (match &falsity $x True))"
+    expression_to_evaluate = "!(find-evidence-for ⊥)"
     return validate_expressions_truthy_after_adding_expressions_to_space(
         [metta_premise, metta_hypothesis], CONTRADICTIONS_PATH, expression_to_evaluate
     )
