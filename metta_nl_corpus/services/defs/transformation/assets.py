@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +12,7 @@ from dagster import asset
 from dotenv import load_dotenv
 from huggingface_hub.utils.tqdm import tqdm
 from hyperon import MeTTa
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai.types.chat.chat_completion_system_message_param import (
     ChatCompletionSystemMessageParam,
 )
@@ -97,6 +98,20 @@ class LLMAgent:
         )
         return result.choices[0].message.content
 
+    async def _run_openai_async(self, prompt: str):
+        assert self._model_is_openai
+
+        client = AsyncOpenAI()  # Uses OPENAI_API_KEY env var
+        result = await client.chat.completions.create(
+            model=self.model,
+            messages=self.message_history
+            + cast(
+                list[ChatCompletionUserMessageParam],
+                [{"role": "user", "content": prompt}],
+            ),
+        )
+        return result.choices[0].message.content
+
     def _run_ollama(self, prompt: str):
         assert not self._model_is_openai
 
@@ -119,22 +134,44 @@ class LLMAgent:
                 expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
             )
 
+    async def run_async(self, user_prompt) -> GenerationResult:
+        """Async version of run - only supports OpenAI models."""
+        if not self._model_is_openai:
+            raise ValueError("Async execution only supported for OpenAI models")
+
+        try:
+            content = await self._run_openai_async(user_prompt)
+            logger.info("Generated LLM response", content=content)
+            return extract_metta_expression(content)
+        except Exception as e:
+            logger.error("OpenAI generation failed", error=str(e))
+            return GenerationResult(
+                expression=None, failure_reason=GenerationFailureReason.NO_CONTENT
+            )
+
 
 def parse_metta_expression(expression: str) -> str:
     """Extract MeTTa code from a string that may contain markdown code blocks.
 
     Extracts content from the last code block found, or returns the input as-is if no code blocks exist.
+    Removes lines that start with ';' (MeTTa comments).
     """
     import re
 
     # Find all code blocks (with optional language identifier)
     matches = re.findall(r"```[^\n]*\n(.*?)\n```", expression, re.DOTALL)
     if matches:
-        # Return the last match
-        return matches[-1].strip()
+        # Get the last match
+        code = matches[-1].strip()
+    else:
+        # No code block found, use input as-is
+        code = expression.strip()
 
-    # No code block found, return as-is
-    return expression.strip()
+    # Remove lines that start with ';' (MeTTa comments)
+    lines = code.split("\n")
+    filtered_lines = [line for line in lines if not line.lstrip().startswith(";")]
+
+    return "\n".join(filtered_lines).strip()
 
 
 def extract_metta_expression(content: str | None) -> GenerationResult:
@@ -180,7 +217,8 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         # result is a list of results (atoms)
         if result and len(result) > 0 and len(result[-1]) > 0:
             logger.info(
-                "MeTTa expressions are contradictory",
+                "MeTTa expressions pass validation",
+                expression=expression_to_evaluate,
             )
             return True
 
@@ -189,7 +227,8 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         return False
 
     logger.info(
-        "MeTTa expressions are not contradictory",
+        "MeTTa expressions are not valid",
+        expression=expression_to_evaluate,
     )
     return False
 
@@ -199,10 +238,10 @@ def validate_expressions_are_entailing(
 ) -> bool:
     pass
     # Load background knowledge
-    expression_to_evaluate = f"!(find-evidence-for {metta_hypothesis})"
+    expression_to_evaluate = f"!(find-evidence-for (, {metta_hypothesis}))"
     return validate_expressions_truthy_after_adding_expressions_to_space(
         [
-            f"!(add-proposition {metta_premise})",
+            f"!(add-proposition (, {metta_premise}))",  # TODO(seb): implement arbitrary length product proof
         ],
         ENTAILMENTS_PATH,
         expression_to_evaluate,
@@ -216,7 +255,7 @@ def validate_expressions_are_contradictory(
     # Load background knowledge
     expression_to_evaluate = "!(find-evidence-for ⊥)"
     return validate_expressions_truthy_after_adding_expressions_to_space(
-        [metta_premise, metta_hypothesis], CONTRADICTIONS_PATH, expression_to_evaluate
+        [metta_premise, metta_hypothesis], ENTAILMENTS_PATH, expression_to_evaluate
     )
 
 
@@ -234,7 +273,9 @@ def validate_expressions_by_label(
         RelationKind.ENTAILMENT: validate_expressions_are_entailing,
         RelationKind.CONTRADICTION: validate_expressions_are_contradictory,
         RelationKind.NEUTRAL: validate_expressions_are_neutral,
-    }[label]
+    }.get(
+        label, validate_expressions_are_neutral
+    )  # Default to neutral if label not found
 
     return validation_function(metta_premise, metta_hypothesis)
 
@@ -261,100 +302,22 @@ def get_grounding_space_versions():
 ) = get_grounding_space_versions()
 
 
-def generate_and_validate(
+def _create_annotation_and_validation(
+    annotation_id: str,
+    index: int,
     premise: str,
     hypothesis: str,
     label: RelationKind,
-    index: int,
+    last_metta_premise: str,
+    last_metta_hypothesis: str,
     annotation_model: str,
-    max_attempts: int = 3,
+    system_prompt: str,
+    final_premise_prompt: str,
+    final_hypothesis_prompt: str,
 ) -> GenerateAndValidateResult:
     """
-    Generate MeTTa expressions for premise and hypothesis, validate them,
-    and retry with additional context if validation fails.
-
-    Returns:
-        GenerateAndValidateResult containing annotation and validation data
+    Shared logic to create annotation and validation records.
     """
-    additional_context = ""
-    last_metta_premise = ""
-    last_metta_hypothesis = ""
-    final_premise_prompt = ""
-    final_hypothesis_prompt = ""
-
-    # Generate unique ID for this annotation
-    annotation_id = str(uuid4())
-
-    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
-    agent = LLMAgent(model=annotation_model, system_prompt=system_prompt)
-
-    for attempt in range(max_attempts):
-        logger.info(
-            f"Generating MeTTa expressions (attempt {attempt})", model=annotation_model
-        )
-
-        metta_premise_prompt = PREMISE_PROMPT_TEMPLATE.format(
-            premise=premise,
-            additional_context=additional_context,
-        )
-
-        metta_premise_result = agent.run(metta_premise_prompt)
-
-        if not metta_premise_result.expression:
-            logger.error(
-                "Failed to generate MeTTa expression for premise",
-                premise=premise,
-                error=metta_premise_result.failure_reason,
-            )
-            continue
-
-        metta_hypothesis_prompt = HYPOTHESIS_PROMPT_TEMPLATE.format(
-            premise=premise,
-            hypothesis=hypothesis,
-            metta_premise_result=metta_premise_result.expression,
-            additional_context=additional_context,
-        )
-
-        metta_hypothesis_result = agent.run(metta_hypothesis_prompt)
-
-        last_metta_premise = metta_premise_result.expression
-        last_metta_hypothesis = metta_hypothesis_result.expression
-        if not last_metta_hypothesis:
-            logger.error(
-                f"Failed to generate MeTTa expression for hypothesis {hypothesis}"
-            )
-            continue
-
-        logger.info(
-            "Generated MeTTa expressions for premise and hypothesis",
-            premise=premise,
-            hypothesis=hypothesis,
-            metta_premise=last_metta_premise,
-            metta_hypothesis=last_metta_hypothesis,
-        )
-
-        if INFERENCE_MODE:
-            # Validate if contradiction label
-            is_valid = validate_expressions_by_label(
-                label=label,
-                metta_premise=last_metta_premise,
-                metta_hypothesis=last_metta_hypothesis,
-            )
-
-            # If validation failed, generate again with additional context
-            additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
-                premise=premise,
-                hypothesis=hypothesis,
-                last_metta_premise=last_metta_premise,
-                last_metta_hypothesis=last_metta_hypothesis,
-            )
-        else:
-            break
-
-    if not last_metta_premise or not last_metta_hypothesis:
-        return GenerateAndValidateResult(annotation=None, validation=None)
-
-    # Create annotation dict
     annotation = Annotation.validate(
         pandera_record(
             {
@@ -386,7 +349,7 @@ def generate_and_validate(
                 Validation.validation_id: str(uuid4()),
                 Validation.annotation_id: annotation_id,
                 Validation.is_valid: is_valid,
-                Validation.relation_kind: label,  # The relation being validated
+                Validation.relation_kind: label,
                 Validation.entailment_space_hash: ENTAILMENT_SPACE_HASH,
                 Validation.entailment_git_commit_hash: ENTAILMENT_GIT_HASH,
                 Validation.contradiction_space_hash: CONTRADICTIONS_SPACE_HASH,
@@ -397,6 +360,272 @@ def generate_and_validate(
     )
 
     return GenerateAndValidateResult(annotation=annotation, validation=validation)
+
+
+async def _generate_expressions_async(
+    agent: LLMAgent,
+    premise: str,
+    hypothesis: str,
+    label: RelationKind,
+    max_attempts: int,
+) -> tuple[str, str, str, str]:
+    """
+    Async helper to generate MeTTa expressions with retries.
+    Returns (last_metta_premise, last_metta_hypothesis, final_premise_prompt, final_hypothesis_prompt)
+    """
+    additional_context = ""
+    last_metta_premise = ""
+    last_metta_hypothesis = ""
+    final_premise_prompt = ""
+    final_hypothesis_prompt = ""
+
+    for attempt in range(max_attempts):
+        logger.info(
+            f"Generating MeTTa expressions (attempt {attempt})", model=agent.model
+        )
+
+        metta_premise_prompt = PREMISE_PROMPT_TEMPLATE.format(
+            premise=premise,
+            additional_context=additional_context,
+        )
+        final_premise_prompt = metta_premise_prompt
+
+        metta_premise_result = await agent.run_async(metta_premise_prompt)
+
+        if not metta_premise_result.expression:
+            logger.error(
+                "Failed to generate MeTTa expression for premise",
+                premise=premise,
+                error=metta_premise_result.failure_reason,
+            )
+            continue
+
+        metta_hypothesis_prompt = HYPOTHESIS_PROMPT_TEMPLATE.format(
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise_result=metta_premise_result.expression,
+            additional_context=additional_context,
+        )
+        final_hypothesis_prompt = metta_hypothesis_prompt
+
+        metta_hypothesis_result = await agent.run_async(metta_hypothesis_prompt)
+
+        last_metta_premise = metta_premise_result.expression
+        last_metta_hypothesis = metta_hypothesis_result.expression
+        if not last_metta_hypothesis:
+            logger.error(
+                f"Failed to generate MeTTa expression for hypothesis {hypothesis}"
+            )
+            continue
+
+        logger.info(
+            "Generated MeTTa expressions for premise and hypothesis",
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise=last_metta_premise,
+            metta_hypothesis=last_metta_hypothesis,
+        )
+
+        if INFERENCE_MODE:
+            _is_valid = validate_expressions_by_label(
+                label=label,
+                metta_premise=last_metta_premise,
+                metta_hypothesis=last_metta_hypothesis,
+            )
+
+            additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
+                premise=premise,
+                hypothesis=hypothesis,
+                last_metta_premise=last_metta_premise,
+                last_metta_hypothesis=last_metta_hypothesis,
+            )
+        else:
+            break
+
+    return (
+        last_metta_premise,
+        last_metta_hypothesis or "",
+        final_premise_prompt,
+        final_hypothesis_prompt,
+    )
+
+
+def _generate_expressions_sync(
+    agent: LLMAgent,
+    premise: str,
+    hypothesis: str,
+    label: RelationKind,
+    max_attempts: int,
+) -> tuple[str, str, str, str]:
+    """
+    Sync helper to generate MeTTa expressions with retries.
+    Returns (last_metta_premise, last_metta_hypothesis, final_premise_prompt, final_hypothesis_prompt)
+    """
+    additional_context = ""
+    last_metta_premise = ""
+    last_metta_hypothesis = ""
+    final_premise_prompt = ""
+    final_hypothesis_prompt = ""
+
+    for attempt in range(max_attempts):
+        logger.info(
+            f"Generating MeTTa expressions (attempt {attempt})", model=agent.model
+        )
+
+        metta_premise_prompt = PREMISE_PROMPT_TEMPLATE.format(
+            premise=premise,
+            additional_context=additional_context,
+        )
+        final_premise_prompt = metta_premise_prompt
+
+        metta_premise_result = agent.run(metta_premise_prompt)
+
+        if not metta_premise_result.expression:
+            logger.error(
+                "Failed to generate MeTTa expression for premise",
+                premise=premise,
+                error=metta_premise_result.failure_reason,
+            )
+            continue
+
+        metta_hypothesis_prompt = HYPOTHESIS_PROMPT_TEMPLATE.format(
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise_result=metta_premise_result.expression,
+            additional_context=additional_context,
+        )
+        final_hypothesis_prompt = metta_hypothesis_prompt
+
+        metta_hypothesis_result = agent.run(metta_hypothesis_prompt)
+
+        last_metta_premise = metta_premise_result.expression
+        last_metta_hypothesis = metta_hypothesis_result.expression
+        if not last_metta_hypothesis:
+            logger.error(
+                f"Failed to generate MeTTa expression for hypothesis {hypothesis}"
+            )
+            continue
+
+        logger.info(
+            "Generated MeTTa expressions for premise and hypothesis",
+            premise=premise,
+            hypothesis=hypothesis,
+            metta_premise=last_metta_premise,
+            metta_hypothesis=last_metta_hypothesis,
+        )
+
+        if INFERENCE_MODE:
+            _is_valid = validate_expressions_by_label(
+                label=label,
+                metta_premise=last_metta_premise,
+                metta_hypothesis=last_metta_hypothesis,
+            )
+
+            additional_context = ADDITIONAL_CONTEXT_FEEDBACK_TEMPLATE.format(
+                premise=premise,
+                hypothesis=hypothesis,
+                last_metta_premise=last_metta_premise,
+                last_metta_hypothesis=last_metta_hypothesis,
+            )
+        else:
+            break
+
+    return (
+        last_metta_premise,
+        last_metta_hypothesis or "",
+        final_premise_prompt,
+        final_hypothesis_prompt,
+    )
+
+
+def generate_and_validate(
+    premise: str,
+    hypothesis: str,
+    label: RelationKind,
+    index: int,
+    annotation_model: str,
+    max_attempts: int = 3,
+) -> GenerateAndValidateResult:
+    """
+    Generate MeTTa expressions for premise and hypothesis, validate them,
+    and retry with additional context if validation fails.
+
+    Returns:
+        GenerateAndValidateResult containing annotation and validation data
+    """
+    annotation_id = str(uuid4())
+    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
+    agent = LLMAgent(model=annotation_model, system_prompt=system_prompt)
+
+    (
+        last_metta_premise,
+        last_metta_hypothesis,
+        final_premise_prompt,
+        final_hypothesis_prompt,
+    ) = _generate_expressions_sync(agent, premise, hypothesis, label, max_attempts)
+
+    if not last_metta_premise or not last_metta_hypothesis:
+        return GenerateAndValidateResult(annotation=None, validation=None)
+
+    return _create_annotation_and_validation(
+        annotation_id=annotation_id,
+        index=index,
+        premise=premise,
+        hypothesis=hypothesis,
+        label=label,
+        last_metta_premise=last_metta_premise,
+        last_metta_hypothesis=last_metta_hypothesis,
+        annotation_model=annotation_model,
+        system_prompt=system_prompt,
+        final_premise_prompt=final_premise_prompt,
+        final_hypothesis_prompt=final_hypothesis_prompt,
+    )
+
+
+async def generate_and_validate_async(
+    premise: str,
+    hypothesis: str,
+    label: RelationKind,
+    index: int,
+    annotation_model: str,
+    max_attempts: int = 3,
+) -> GenerateAndValidateResult:
+    """
+    Async version: Generate MeTTa expressions for premise and hypothesis, validate them,
+    and retry with additional context if validation fails.
+
+    Returns:
+        GenerateAndValidateResult containing annotation and validation data
+    """
+    annotation_id = str(uuid4())
+    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
+    agent = LLMAgent(model=annotation_model, system_prompt=system_prompt)
+
+    (
+        last_metta_premise,
+        last_metta_hypothesis,
+        final_premise_prompt,
+        final_hypothesis_prompt,
+    ) = await _generate_expressions_async(
+        agent, premise, hypothesis, label, max_attempts
+    )
+
+    if not last_metta_premise or not last_metta_hypothesis:
+        return GenerateAndValidateResult(annotation=None, validation=None)
+
+    return _create_annotation_and_validation(
+        annotation_id=annotation_id,
+        index=index,
+        premise=premise,
+        hypothesis=hypothesis,
+        label=label,
+        last_metta_premise=last_metta_premise,
+        last_metta_hypothesis=last_metta_hypothesis,
+        annotation_model=annotation_model,
+        system_prompt=system_prompt,
+        final_premise_prompt=final_premise_prompt,
+        final_hypothesis_prompt=final_hypothesis_prompt,
+    )
 
 
 def process_in_batches(
@@ -437,6 +666,50 @@ def process_in_batches(
     return processed_rows
 
 
+async def process_in_batches_async(
+    rows: list[dict],
+    process_fn_async,  # Async function that takes a dict and returns GenerateAndValidateResult
+    subset_size: int,
+    batch_size: int,
+    description: str = "Processing",
+) -> Sequence[GenerateAndValidateResult]:
+    """
+    Process rows in batches asynchronously with progress tracking.
+    Each batch is processed concurrently, with all items in a batch executing in parallel.
+
+    Args:
+        rows: List of row dictionaries to process
+        process_fn_async: Async function to apply to each row
+        subset_size: Maximum number of rows to process
+        batch_size: Number of rows to process concurrently in each batch
+        description: Description for the progress bar
+
+    Returns:
+        List of processed results
+    """
+    # Limit to subset_size
+    rows_to_process = rows[:subset_size]
+    processed_rows: list[GenerateAndValidateResult] = []
+
+    # Process in batches with tqdm
+    for i in tqdm(
+        range(0, len(rows_to_process), batch_size),
+        desc=description,
+        unit="batch",
+        total=(len(rows_to_process) + batch_size - 1) // batch_size,
+    ):
+        batch = rows_to_process[i : min(subset_size, i + batch_size)]
+
+        # Create async tasks for all items in the batch
+        tasks = [process_fn_async(row) for row in batch]
+
+        # Execute all tasks in the batch concurrently
+        batch_results = await asyncio.gather(*tasks)
+        processed_rows.extend(batch_results)
+
+    return processed_rows
+
+
 @asset(required_resource_keys={"pipeline_config"})
 def data_annotations(
     context,
@@ -470,13 +743,13 @@ def data_annotations(
     )
 
     # Apply generate_and_validate to all rows
-    def process_row(row: dict) -> GenerateAndValidateResult:
+    async def process_row_async(row: dict) -> GenerateAndValidateResult:
         premise = row[str(TrainingData.premise)]
         hypothesis = row[str(TrainingData.hypothesis)]
         label = row[str(TrainingData.label)]
         index = row["index"]
 
-        return generate_and_validate(
+        return await generate_and_validate_async(
             premise=premise,
             hypothesis=hypothesis,
             label=label,
@@ -485,12 +758,16 @@ def data_annotations(
         )
 
     rows = dataset_to_annotate.to_dicts()
-    processed_results = process_in_batches(
-        rows=rows,
-        process_fn=process_row,
-        subset_size=pipeline_config.subset_size,
-        batch_size=pipeline_config.batch_size,
-        description="Generating MeTTa annotations",
+
+    # Run async batch processing
+    processed_results = asyncio.run(
+        process_in_batches_async(
+            rows=rows,
+            process_fn_async=process_row_async,
+            subset_size=pipeline_config.subset_size,
+            batch_size=pipeline_config.batch_size,
+            description="Generating MeTTa annotations",
+        )
     )
 
     # Separate annotations and validations
