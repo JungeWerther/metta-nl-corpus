@@ -182,3 +182,61 @@ And here's another one:
 ```"""
         result = parse_metta_expression(expression)
         assert result == "(second-expression)"
+
+    def test_removes_comment_lines(self):
+        """Test that lines starting with ; are removed."""
+        expression = """```metta
+; This is a comment
+(children smiling)
+; Another comment
+(children waving)
+```"""
+        result = parse_metta_expression(expression)
+        assert result == "(children smiling)\n(children waving)"
+
+    def test_removes_indented_comment_lines(self):
+        """Test that lines starting with ; after whitespace are removed."""
+        expression = """```metta
+(children smiling)
+  ; This is an indented comment
+(children waving)
+    ; Another indented comment
+```"""
+        result = parse_metta_expression(expression)
+        assert result == "(children smiling)\n(children waving)"
+
+    def test_removes_comments_without_code_blocks(self):
+        """Test that comments are removed even without code blocks."""
+        expression = """; This is a comment
+(children smiling)
+; Another comment
+(children waving)"""
+        result = parse_metta_expression(expression)
+        assert result == "(children smiling)\n(children waving)"
+
+    def test_preserves_semicolons_within_expressions(self):
+        """Test that semicolons within expressions are preserved."""
+        expression = """```metta
+(text "hello; world")
+; This is a comment
+(data "value; semicolon")
+```"""
+        result = parse_metta_expression(expression)
+        assert result == '(text "hello; world")\n(data "value; semicolon")'
+
+    def test_removes_comments_mixed_with_code(self):
+        """Test removal of comments in complex code."""
+        expression = """```metta
+; Header comment
+(= (process-data $input)
+   ; Process the input
+   (let $result
+      ; Transform step
+      (transform $input)
+      ; Validation step
+      (validate $result)))
+; Footer comment
+```"""
+        result = parse_metta_expression(expression)
+        expected = "(= (process-data $input)\n   (let $result\n      (transform $input)\n      (validate $result)))"
+        assert result == expected
