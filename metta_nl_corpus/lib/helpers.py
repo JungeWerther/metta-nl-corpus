@@ -1,12 +1,15 @@
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
-import polars as pl
 
+import polars as pl
 from dagster._core.execution.context.asset_execution_context import (
     AssetExecutionContext,
 )
+from hyperon import MeTTa
 
 from metta_nl_corpus.lib.interfaces import Fn, Transformation
+
+parse_all = MeTTa().parse_all
 
 
 class Indexable(Protocol):
@@ -75,3 +78,9 @@ def str_index[T](mapping: Iterable, coalesce: T = Never) -> Fn[int, T]:
         raise IndexError(f"Invalid index <{number}> for mapping <{mapping}>.")
 
     return inner
+
+
+def to_metta_tuple(expression: str) -> str:
+    if len(atoms := parse_all(expression)) > 1:
+        return f"(, {' '.join(map(str, atoms))})"
+    return atoms[0] or "()"

@@ -1,5 +1,11 @@
 # Project Coding Rules
 
+## Output Files
+
+- Never create convenience scripts (e.g., render.sh, run.sh, deploy.sh)
+- Never create summary documents (e.g., SUMMARY.md, PRODUCTION_NOTES.md, OVERVIEW.md)
+- Focus on core implementation files only
+
 ## Constants and Enumerations
 
 - When defining more than one related constant, prefer using `StrEnum` from the `enum` module

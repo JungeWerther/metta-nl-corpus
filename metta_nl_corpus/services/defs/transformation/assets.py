@@ -27,6 +27,7 @@ from metta_nl_corpus.constants import (
     PROJECT_ROOT,
     VALIDATIONS_PATH,
 )
+from metta_nl_corpus.lib.helpers import parse_all, to_metta_tuple
 from metta_nl_corpus.lib.interfaces import Fn
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.lib.space_versioning import get_space_version
@@ -197,6 +198,8 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
     if not expressions_to_add_to_space:
         return False
 
+    logger.info("Validating expressions", expressions=expressions_to_add_to_space)
+
     try:
         runner = MeTTa()
 
@@ -227,7 +230,7 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         return False
 
     logger.info(
-        "MeTTa expressions are not valid",
+        "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
     )
     return False
@@ -238,11 +241,9 @@ def validate_expressions_are_entailing(
 ) -> bool:
     pass
     # Load background knowledge
-    expression_to_evaluate = f"!(find-evidence-for (, {metta_hypothesis}))"
+    expression_to_evaluate = f"!(find-evidence-for {to_metta_tuple(metta_hypothesis)})"
     return validate_expressions_truthy_after_adding_expressions_to_space(
-        [
-            f"!(add-proposition (, {metta_premise}))",  # TODO(seb): implement arbitrary length product proof
-        ],
+        [f"!(add-proposition {premise})" for premise in parse_all(metta_premise)],
         ENTAILMENTS_PATH,
         expression_to_evaluate,
     )
