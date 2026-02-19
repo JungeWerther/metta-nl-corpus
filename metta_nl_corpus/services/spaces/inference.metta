@@ -34,6 +34,9 @@
 (= (add-proposition $x) (add-atom &a $x)) ; do we really need the base atom, or only its relations?
 (= (add-proposition ($attr $ob)) (add-atom &a (=> ($ob $x) ($attr $x))))
 
+(= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
+(= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
+
 !(add-proposition (=>
   (,
     ($a $x)

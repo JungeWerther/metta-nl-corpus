@@ -194,6 +194,7 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
     expressions_to_add_to_space: Sequence[str],
     grounding_space_path: Path,
     expression_to_evaluate: str,
+    verbose: bool = False,
 ) -> bool:
     if not expressions_to_add_to_space:
         return False
@@ -233,11 +234,16 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
     )
+
+    if verbose:
+        result = runner.run("!(all)")
+        logger.error(result)
+
     return False
 
 
 def validate_expressions_are_entailing(
-    metta_premise: str, metta_hypothesis: str
+    metta_premise: str, metta_hypothesis: str, verbose: bool = False
 ) -> bool:
     pass
     # Load background knowledge
@@ -246,6 +252,7 @@ def validate_expressions_are_entailing(
         [f"!(add-proposition {premise})" for premise in parse_all(metta_premise)],
         ENTAILMENTS_PATH,
         expression_to_evaluate,
+        verbose=verbose,
     )
 
 
