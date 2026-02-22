@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
@@ -9,7 +10,7 @@ from hyperon import MeTTa
 
 from metta_nl_corpus.lib.interfaces import Fn, Transformation
 
-parse_all = MeTTa().parse_all
+parse_all: Sequence[str] = MeTTa().parse_all
 
 
 class Indexable(Protocol):
