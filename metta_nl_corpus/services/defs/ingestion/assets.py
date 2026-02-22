@@ -71,6 +71,22 @@ def load_annotations(file_path: Path) -> pl.DataFrame:
     df = pl.read_parquet(file_path)
     if "is_valid" not in df.columns:
         df = df.with_columns(pl.lit(True).alias("is_valid"))
+    # Add token columns for backward compatibility with older annotation files
+    if "input_tokens" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("input_tokens"))
+    if "output_tokens" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("output_tokens"))
+    # Add required Annotation columns if missing (older schema)
+    if "annotation_id" not in df.columns:
+        df = df.with_columns(pl.lit("").alias("annotation_id"))
+    if "generation_model" not in df.columns:
+        df = df.with_columns(pl.lit("").alias("generation_model"))
+    if "system_prompt" not in df.columns:
+        df = df.with_columns(pl.lit("").alias("system_prompt"))
+    # Drop deprecated columns if present (from older schema)
+    for col in ("metta_premise_prompt", "metta_hypothesis_prompt"):
+        if col in df.columns:
+            df = df.drop(col)
     return df
 
 
