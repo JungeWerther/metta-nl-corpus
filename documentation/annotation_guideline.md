@@ -17,10 +17,10 @@ One way of expressing this in MeTTa would be so assign the property of "blackhai
 
 ```MeTTa
 ; (Predicate Object)
-(blackHaired Socrates)
+(black-haired Socrates)
 
 ; equivalently:
-(=> (Socrates) (blackHaired))
+(=> (Socrates) (black-haired))
 ```
 
 __Both expressions are valid!__
@@ -38,7 +38,7 @@ When asked to represent "a woman walks in the park. There are no women in the pa
 
 ```MeTTa
 (woman a-woman) ; "a-woman is a woman"
-(not (inThePark woman)) ; "for all women x there is no x which has the property of being in the park"
+(is-not (in-the-park woman)) ; "for all women x there is no x which has the property of being in the park"
 ```
 
 **IMPORTANT**: Always add as many expressions as you like to capture all the concepts.
@@ -48,24 +48,24 @@ Examples:
 ```MeTTa
 ; the cat jumped off the roof
 (cat the-cat) ; being a cat is a property of the-cat
-(jumpedOffRoof the-cat)
+(jumped-off the-cat the-roof)
 
 ; some elephant in the room
 (elephant some-elephant)
-(inTheRoom some-elephant)
+(in-the-room some-elephant)
 
 ; I knew that John was angry
 (=> (John) (human)) ; same as (human John)
-(=> myKnowledge (angry John))
+(=> my-knowledge (angry John))
 
 ; it was a day to remember
 (day the-day) ; the-day is a day
-(wasMemorable the-day) ; wasMemorable is a property of the-day
+(was-memorable the-day) ; wasMemorable is a property of the-day
 
 ; a blue wizard appeared suddenly
 (wizard a-wizard)
 (blue wizard)
-(suddenlyAppeared wizard)
+(suddenly-appeared wizard)
 ```
 
 Some notes:
@@ -91,10 +91,10 @@ Also, when we're dealing with a negation, let's represent it with the keyword `n
 ; there is not a hair on my head that considers this
 (hair hair-on-my-head) ; hair-on-my-head is a hair
 (on-my-head hair-on-my-head) ; hair-on-my-head is on my head
-(not (considers-this hair-on-my-head))
+((is-not considering-this) hair-on-my-head)
 
 ; it's also fine to present a synonym, when dealing with expressions
-(not-considered-by-me this)
+(is-not considered-by-me this)
 ```
 
 ```MeTTa
