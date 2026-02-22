@@ -15,6 +15,11 @@ from structlog import get_logger
 
 from metta_nl_corpus.constants import ANNOTATIONS_PATH
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
+from metta_nl_corpus.constants import CLEANED_ANNOTATIONS_PATH
+from metta_nl_corpus.services.defs.cleaning.assets import (
+    bronze_dataset,
+    cleaned_annotations,
+)
 from metta_nl_corpus.services.defs.ingestion.assets import (
     cached_annotations,
     cached_validations,
@@ -135,6 +140,88 @@ class PipelineExecutor:
         except Exception as e:
             error_msg: str = f"Error during pipeline execution: {str(e)}"
             logger.exception("Error during pipeline execution")
+            return ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                cache_key=cache_key,
+                error=str(e),
+            )
+
+    async def execute_clean_pipeline(
+        self,
+        hf_id: str = "JungeWerther/metta-nl-corpus-bronze-0.1",
+        filename: str = "annotations.parquet",
+        keep_invalid: bool = False,
+    ) -> ExecutionResult:
+        """Execute the cleaning pipeline on a bronze dataset."""
+        cache_key = f"clean_{hf_id}".replace("/", "_")
+
+        logger.info(
+            "Starting clean pipeline execution",
+            hf_id=hf_id,
+            filename=filename,
+            keep_invalid=keep_invalid,
+        )
+
+        assets = [bronze_dataset, cleaned_annotations]
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: materialize(
+                    assets,
+                    instance=self.instance,
+                    raise_on_error=False,
+                    run_config={
+                        "ops": {
+                            "bronze_dataset": {
+                                "config": {
+                                    "hf_id": hf_id,
+                                    "filename": filename,
+                                    "keep_invalid": keep_invalid,
+                                }
+                            },
+                            "cleaned_annotations": {
+                                "config": {
+                                    "hf_id": hf_id,
+                                    "filename": filename,
+                                    "keep_invalid": keep_invalid,
+                                }
+                            },
+                        }
+                    },
+                ),
+            )
+
+            if result.success:
+                annotations_count: int = 0
+                try:
+                    df = pl.read_parquet(CLEANED_ANNOTATIONS_PATH)
+                    annotations_count = len(df)
+                except Exception:
+                    pass
+
+                logger.info(
+                    "Clean pipeline completed successfully",
+                    annotations_count=annotations_count,
+                )
+                return ExecutionResult(
+                    status=ExecutionStatus.SUCCESS,
+                    cache_key=cache_key,
+                    annotations_path=str(CLEANED_ANNOTATIONS_PATH),
+                    annotations_count=annotations_count,
+                    dataset=hf_id,
+                )
+            else:
+                logger.error("Clean pipeline failed")
+                return ExecutionResult(
+                    status=ExecutionStatus.FAILED,
+                    cache_key=cache_key,
+                    error="Clean pipeline failed. Check logs for details.",
+                )
+
+        except Exception as e:
+            logger.exception("Error during clean pipeline execution")
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 cache_key=cache_key,

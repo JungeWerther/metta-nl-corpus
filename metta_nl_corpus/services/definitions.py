@@ -7,6 +7,7 @@ from dagster import (
     load_assets_from_modules,
 )
 
+from metta_nl_corpus.services.defs.cleaning import assets as cleaning_assets
 from metta_nl_corpus.services.defs.ingestion import assets as ingestion_assets
 from metta_nl_corpus.services.defs.transformation import assets as transformation_assets
 
@@ -15,6 +16,7 @@ from metta_nl_corpus.services.defs.transformation import assets as transformatio
 all_assets = [
     *load_assets_from_modules([ingestion_assets]),
     *load_assets_from_modules([transformation_assets]),
+    *load_assets_from_modules([cleaning_assets]),
 ]
 
 # Define resources

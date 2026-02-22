@@ -146,5 +146,58 @@ async def _run_pipeline(
         )
 
 
+@cli.command()
+@click.option(
+    "--hf-id",
+    default="JungeWerther/metta-nl-corpus-bronze-0.1",
+    help="HuggingFace dataset ID for the bronze dataset",
+)
+@click.option(
+    "--filename",
+    default="annotations.parquet",
+    help="Filename within the dataset repository",
+)
+def clean(hf_id: str, filename: str):
+    """Clean and re-validate a bronze dataset."""
+    asyncio.run(
+        _run_clean_pipeline(
+            hf_id=hf_id,
+            filename=filename,
+        )
+    )
+
+
+async def _run_clean_pipeline(
+    hf_id: str,
+    filename: str,
+):
+    """Run the cleaning pipeline."""
+    logger.info(
+        "Starting clean pipeline",
+        hf_id=hf_id,
+        filename=filename,
+    )
+
+    executor: PipelineExecutor = PipelineExecutor()
+    result: ExecutionResult = await executor.execute_clean_pipeline(
+        hf_id=hf_id,
+        filename=filename,
+    )
+
+    if result.status == ExecutionStatus.SUCCESS:
+        logger.info(
+            "Clean pipeline completed",
+            status=result.status,
+            annotations_path=result.annotations_path,
+            annotations_count=result.annotations_count,
+        )
+    else:
+        logger.error(
+            "Clean pipeline failed",
+            status=result.status,
+            error=result.error,
+        )
+
+
 if __name__ == "__main__":
     cli()
