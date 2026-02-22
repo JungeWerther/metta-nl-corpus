@@ -218,6 +218,10 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         result = runner.run(expression_to_evaluate)
         logger.info("MeTTa validation result", result=result)
 
+        if verbose:
+            all = runner.run("!(all)")
+            logger.warning("[all]", result=all)
+
         # result is a list of results (atoms)
         if result and len(result) > 0 and len(result[-1]) > 0:
             logger.info(
@@ -234,10 +238,6 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
         "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
     )
-
-    if verbose:
-        result = runner.run("!(all)")
-        logger.error(result)
 
     return False
 
@@ -257,13 +257,22 @@ def validate_expressions_are_entailing(
 
 
 def validate_expressions_are_contradictory(
-    metta_premise: str, metta_hypothesis: str
+    metta_premise: str, metta_hypothesis: str, verbose: bool = False
 ) -> bool:
     pass
     # Load background knowledge
     expression_to_evaluate = "!(find-evidence-for ⊥)"
     return validate_expressions_truthy_after_adding_expressions_to_space(
-        [metta_premise, metta_hypothesis], ENTAILMENTS_PATH, expression_to_evaluate
+        [
+            *[f"!(add-proposition {premise})" for premise in parse_all(metta_premise)],
+            *[
+                f"!(add-proposition {hypothesis})"
+                for hypothesis in parse_all(metta_hypothesis)
+            ],
+        ],
+        ENTAILMENTS_PATH,
+        expression_to_evaluate,
+        verbose=verbose,
     )
 
 
