@@ -13,6 +13,7 @@ from dagster import (
 )
 from structlog import get_logger
 
+from metta_nl_corpus.constants import ANNOTATIONS_PATH
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.services.defs.ingestion.assets import (
     cached_annotations,
@@ -104,7 +105,7 @@ class PipelineExecutor:
             if result.success:
                 annotations_count: int
                 try:
-                    df = pl.read_parquet(pipeline_config.annotations_path)
+                    df = pl.read_parquet(ANNOTATIONS_PATH)
                     annotations_count = len(df)
                 except Exception:
                     annotations_count = 0
@@ -117,7 +118,7 @@ class PipelineExecutor:
                 return ExecutionResult(
                     status=ExecutionStatus.SUCCESS,
                     cache_key=cache_key,
-                    annotations_path=str(pipeline_config.annotations_path),
+                    annotations_path=str(ANNOTATIONS_PATH),
                     annotations_count=annotations_count,
                     dataset=pipeline_config.dataset_config.hf_id,
                     model=pipeline_config.model_name,

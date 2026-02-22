@@ -33,8 +33,8 @@ class Annotation(TrainingBase):
     metta_hypothesis: str | None
     generation_model: str  # Model used for generation
     system_prompt: str  # System prompt used for generation
-    metta_premise_prompt: str  # Prompt used to generate metta_premise
-    metta_hypothesis_prompt: str  # Prompt used to generate metta_hypothesis
+    input_tokens: int | None = Field(default=None, nullable=True)
+    output_tokens: int | None = Field(default=None, nullable=True)
     version: str = Field(default=DATA_VERSION)
 
     class Config:
@@ -64,18 +64,8 @@ class Validation(DataFrameModel):
 class RelationKind(StrEnum):
     ENTAILMENT = "entailment"
     NEUTRAL = "neutral"
-    CONTRADICTION = "contradication"
+    CONTRADICTION = "contradiction"
     NO_LABEL = "no_label"
-
-
-class GenerationFailureReason(StrEnum):
-    NO_CONTENT = "no_content"
-    EMPTY_EXPRESSION = "empty_expression"
-
-
-class GenerationResult(NamedTuple):
-    expression: str | None
-    failure_reason: GenerationFailureReason | None
 
 
 class GenerateAndValidateResult(NamedTuple):

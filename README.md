@@ -45,6 +45,8 @@ Make sure Ollama is running before starting the pipeline:
 ollama serve
 ```
 
+Or put your OpenAI API key in `.env.local`.
+
 Then run the pipeline using the CLI:
 ```bash
 # Run with default settings (10 samples, batch size 10)
@@ -68,7 +70,7 @@ uv run python main.py run --help
 - `--version`: Version of the pipeline run (default: "v1")
 - `--subset-size`: Number of samples to process (default: 10)
 - `--batch-size`: Batch size for processing (default: 10)
-- `--annotation-model`: Model to use for annotation generation (default: "gemma3:1b")
+- `--annotation-model`: Model to use for annotation generation (default: "openai:gpt-4o-mini")
 
 ### Option 2: Using Dagster UI
 

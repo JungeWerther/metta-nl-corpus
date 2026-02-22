@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Protocol, Callable
 
 import polars as pl
 from dagster._core.execution.context.asset_execution_context import (
@@ -10,7 +10,7 @@ from hyperon import MeTTa
 
 from metta_nl_corpus.lib.interfaces import Fn, Transformation
 
-parse_all: Sequence[str] = MeTTa().parse_all
+parse_all: Callable[Sequence[str], Sequence[str]] = MeTTa().parse_all
 
 
 class Indexable(Protocol):
@@ -85,3 +85,12 @@ def to_metta_tuple(expression: str) -> str:
     if len(atoms := parse_all(expression)) > 1:
         return f"(, {' '.join(map(str, atoms))})"
     return atoms[0] or "()"
+
+
+def cleanup_metta_expression(expression: str) -> str:
+    """Parse expression into atoms (stripping comments) and reconstruct without comments."""
+    try:
+        atoms = parse_all(expression)
+        return " ".join(str(a) for a in atoms).strip()
+    except Exception:
+        return expression

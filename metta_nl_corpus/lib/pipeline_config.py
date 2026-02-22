@@ -30,7 +30,7 @@ class PipelineRunConfig(BaseModel):
     version: str
     subset_size: int = 3
     batch_size: int = 10
-    annotation_model: str = "gemma3:1b"
+    annotation_model: str = "openai:gpt-4o-mini"  # Full model string, e.g. "openai:gpt-4o-mini" or "anthropic:claude-3-5-sonnet"
 
     @property
     def cache_key(self) -> str:
