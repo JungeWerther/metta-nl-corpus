@@ -22,3 +22,21 @@ def test_transitivity_on_unary_atoms():
         "(white swan) (swan this-swan) (entity this-swan) (exists entity)",
         "(white this-swan) (exists swan)",
     )
+
+
+def test_expression_works_on_binary_atoms():
+    assert validate_expressions_are_entailing(
+        "(held-by this-swan this-human)", "(held-by this-swan this-human)"
+    )
+
+    assert validate_expressions_are_entailing(
+        "(held-by this-swan this-human) (human this-human)",
+        "(held-by this-swan human)",
+        verbose=True,
+    )
+
+    assert validate_expressions_are_entailing(
+        "(held-by this-swan this-human) (animal this-swan)",
+        "(held-by animal this-human)",
+        verbose=True,
+    )
