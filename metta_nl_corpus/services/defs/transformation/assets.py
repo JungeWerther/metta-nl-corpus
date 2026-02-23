@@ -1,27 +1,26 @@
 import asyncio
 from collections.abc import Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 import httpx
 import polars as pl
 from dagster import asset
 from dotenv import load_dotenv
+from httpx import HTTPStatusError
 from huggingface_hub.utils.tqdm import tqdm
 from hyperon import MeTTa
 from pydantic import BaseModel, model_validator
 from pydantic_ai import Agent, RunContext
-from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
-from structlog import getLogger
-
-from httpx import HTTPStatusError
-
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+from structlog import getLogger
+from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from metta_nl_corpus.constants import (
     ANNOTATION_GUIDELINE_PATH,
@@ -49,6 +48,11 @@ from metta_nl_corpus.models import (
 logger = getLogger(__name__)
 
 load_dotenv(".env.local")
+
+# Stores the last generation attempt so callers can retrieve it on validation failure.
+last_generation_attempt: ContextVar[dict[str, Any] | None] = ContextVar(
+    "last_generation_attempt", default=None
+)
 
 ENTAILMENTS_PATH = PROJECT_ROOT / "metta_nl_corpus/services/spaces/inference.metta"
 CONTRADICTIONS_PATH = (
@@ -156,6 +160,17 @@ class AgentExpressionOutput(BaseModel):
             is_valid=is_valid,
             relation=relation,
         )
+
+        # Store last attempt so callers can retrieve it on failure
+        last_generation_attempt.set(
+            {
+                "metta_premise": metta_premise,
+                "metta_hypothesis": metta_hypothesis,
+                "relation": relation,
+                "is_valid": is_valid,
+            }
+        )
+
         if not is_valid:
             msg = (
                 f"Expressions do not satisfy the claimed relation '{relation}'. "
@@ -266,8 +281,8 @@ def _create_metta_agent(
         output_type=AgentExpressionOutput,
         instructions=system_prompt,
         tools=[parse_all_tool, validate_relation_tool],
-        retries=10,  # More attempts for expression generation to succeed
-        output_retries=10,  # More attempts for relation validation to succeed
+        retries=1,  # More attempts for expression generation to succeed
+        output_retries=1,  # More attempts for relation validation to succeed
     )
 
     @agent.instructions
@@ -300,7 +315,7 @@ def _create_metta_agent(
             "Return the final expressions via AgentExpressionOutput."
         )
 
-    return cast(Agent[ExpressionDeps, AgentExpressionOutput], agent)
+    return agent
 
 
 def validate_expressions_truthy_after_adding_expressions_to_space(
@@ -332,8 +347,9 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             logger.debug("Added expression", expression=expression, result=add_result)
 
         # Dump everything in the space before evaluation
-        all_atoms = runner.run("!(all)")
-        logger.debug("Space contents before evaluation", all_atoms=all_atoms)
+        if verbose:
+            all_atoms = runner.run("!(all)")
+            logger.debug("Space contents before evaluation", all_atoms=all_atoms)
 
         # Check for intersection between truth and falsity spaces
         result = runner.run(expression_to_evaluate)

@@ -35,6 +35,7 @@ class Annotation(TrainingBase):
     system_prompt: str  # System prompt used for generation
     input_tokens: int | None = Field(default=None, nullable=True)
     output_tokens: int | None = Field(default=None, nullable=True)
+    fix_reason: str | None = Field(default=None, nullable=True)
     version: str = Field(default=DATA_VERSION)
 
     class Config:
@@ -65,6 +66,7 @@ class RelationKind(StrEnum):
     ENTAILMENT = "entailment"
     NEUTRAL = "neutral"
     CONTRADICTION = "contradiction"
+    ONTOLOGY = "ontology"
     NO_LABEL = "no_label"
 
 
