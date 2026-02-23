@@ -47,3 +47,28 @@
 
 !(add-proposition ((not white) in-my-vision))
 !(find-evidence-for ⊥)
+
+;; --- Disjunction examples ---
+
+;; "a person is running or walking" — at least one must hold
+!(add-proposition (person a-person))
+!(add-proposition (running a-person))
+
+;; Provable: a-person is running, so (or running walking) holds
+!(find-evidence-for (or (running a-person) (walking a-person)))
+
+;; Not provable: neither swimming nor flying was asserted
+!(find-evidence-for (or (swimming a-person) (flying a-person)))
+
+;; --- Existential quantifier examples ---
+
+;; "some dogs are brown" — witness-level fact, no universal rule
+!(add-existential (dog some-dog))
+!(add-existential (brown some-dog))
+
+;; Provable: some-dog is brown (direct fact)
+!(find-evidence-for (brown some-dog))
+
+;; NOT provable: another-dog is a dog, but no universal "dogs are brown" rule exists
+!(add-existential (dog another-dog))
+!(find-evidence-for (brown another-dog))

@@ -83,19 +83,130 @@ Examples:
 Some notes:
 - whenever multiple properties are mentioned, simply add them as separate Atom expressions
 
-## Quantification, negation, products
+## Type hierarchy with `is-a`
+
+Use `(is-a particular Class)` to place entities in a type hierarchy, and `(is-a SubClass SuperClass)` to express class inheritance. This is useful for building rich ontologies.
+
+```MeTTa
+; a speaker who is an agent, and agents are things
+(is-a a-speaker Agent)
+(is-a Agent Thing)
+
+; a want is a mental state
+(is-a a-want Want)
+(is-a Want MentalState)
+
+; a dog is an animal, animals are living things
+(is-a a-dog Dog)
+(is-a Dog Animal)
+(is-a Animal LivingThing)
+```
+
+**Note on `is-a` vs bare predication**: Both `(human Socrates)` and `(is-a Socrates Human)` express type membership. Use bare predication `(human Socrates)` for simple, flat assertions. Use `(is-a ...)` when building multi-level type hierarchies where the class structure itself matters.
+
+### How `is-a` works in the inference engine
+
+The inference engine includes the rewrite rule `(= (is-a $x $y) ($y $x))`, which converts `is-a` expressions into standard predication. This means `(is-a a-dog Dog)` is equivalent to `(Dog a-dog)`, and transitive chains work automatically:
+
+```MeTTa
+; Given:
+(is-a a-dog Dog)      ; rewrites to (Dog a-dog)
+(is-a Dog Animal)     ; rewrites to (Animal Dog), which expands to: anything that is a Dog is also an Animal
+
+; The engine derives:
+(is-a a-dog Animal)   ; (Animal a-dog) — via transitivity
+```
+
+Multi-level `is-a` hierarchies are fully supported for both ontology extraction and entailment validation.
+
+## Modelling states, abilities, and causation
+
+When sentences describe states, abilities, or causal relationships ("X so Y", "X therefore Y", "because X, Y"), model these as explicit relations between concepts.
+
+### States and properties of agents
+
+```MeTTa
+; "I am free"
+(is-a a-speaker Agent)
+(free a-speaker)
+(is-a Freedom State)
+(hasState a-speaker Freedom)
+```
+
+### Abilities
+
+```MeTTa
+; "I can do whatever I want"
+(is-a a-action Action)
+(canDo a-speaker a-action)
+(unrestricted a-action)
+```
+
+### Causal / enabling relations
+
+When one fact enables or causes another, use `enables` or `causes`:
+
+```MeTTa
+; "I am free so I can do whatever I want"
+(free a-speaker)
+(hasState a-speaker Freedom)
+(canDo a-speaker a-action)
+(enables Freedom a-action)  ; freedom enables the action
+```
+
+### Mental states
+
+Model wants, beliefs, knowledge, and intentions as typed entities with ownership relations:
+
+```MeTTa
+; "whatever I want"
+(is-a a-want Want)
+(is-a Want MentalState)
+(wantsBy a-want a-speaker)  ; the want belongs to the speaker
+```
+
+## Quantification, negation, disjunction, products
 
 Great! What about sentences like "all swans are white" or "there exists a black swan"? We handle them just in the same way as before. But we simply add the predicates the generic class!
 
-```MeTTa
-; all swans are white
-(=> (swan) (white))
+### Universal quantification (`add-proposition`)
 
-; there exists a black swan
-(swan some-swan) ; being a swan is a property of some-swan
-(exists some-swan)
-(black some-swan)
+When a property applies to **all** members of a class, use `add-proposition`. This creates a universal rule in the engine — anything that is a member of the class inherits the property.
+
+```MeTTa
+; all swans are white (universal: every swan is white)
+(white swan)
 ```
+
+### Existential quantification (`add-existential`)
+
+When a property applies to **some** members of a class, use `add-existential`. This adds a fact about a specific witness **without** creating a universal rule. "Some dogs are brown" should NOT entail "all dogs are brown".
+
+```MeTTa
+; some dogs are brown (existential: only this witness is brown)
+(dog some-dog)
+(brown some-dog)
+```
+
+**When to use which:**
+- `add-proposition` — "all swans are white", "every man is mortal", "cats are animals"
+- `add-existential` — "some dogs are brown", "there exists a black swan", "a few people were running"
+
+### Disjunction (`or`)
+
+When a sentence expresses alternatives ("X or Y"), use `(or A B)`. The inference engine proves `(or A B)` if it can prove **either** A or B.
+
+```MeTTa
+; "the person is running or walking"
+(person a-person)
+(or (running a-person) (walking a-person))
+
+; "the animal is a cat or a dog"
+(animal some-animal)
+(or (cat some-animal) (dog some-animal))
+```
+
+**IMPORTANT**: `(or A B)` is used in the **hypothesis** to check if at least one alternative holds. In the **premise**, you typically assert the specific fact that is true (e.g., `(running a-person)`).
 
 When we're dealing with a negation, we use the `is-not` keyword. This is **critical** because the inference engine uses `is-not` to detect contradictions. **Never use `not` for negation — always use `is-not`.**
 
@@ -264,6 +375,11 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 
 !(bind! &a (new-space))
 
+;; Peano numerals for depth-bounded proof search
+(: Nat Type)
+(: Z Nat)
+(: S (-> Nat Nat))
+
 ;; 2. (all ...) can be used in three ways:
 ;;
 ;; - (all): returns everything in the space &a
@@ -277,20 +393,38 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 (= (all $expr) (match &a $expr $expr))
 (= (all $expr $out) (match &a $expr $out))
 
-;; 3. find proofs for $to-prove
-(= (find-evidence-for $to-prove) (match &a $to-prove $to-prove))
-(= (find-evidence-for $to-prove) (=>
+;; 3. find proofs for $to-prove (depth-bounded)
+;; Base: direct match at any depth
+(= (find-evidence-for $to-prove $d) (match &a $to-prove $to-prove))
+
+;; Recursive: one step of transitive chaining (requires depth > 0)
+(= (find-evidence-for $to-prove (S $k)) (=>
   (let $hypothesis (match &a (=> $x $to-prove) $x)
-      (find-evidence-for $hypothesis)
+      (find-evidence-for $hypothesis $k)
   )
   $to-prove
 ))
-(= (find-evidence-for (, $x $y)) (, (find-evidence-for $x) (find-evidence-for $y)))
+
+;; Conjunction
+(= (find-evidence-for (, $x $y) $d) (, (find-evidence-for $x $d) (find-evidence-for $y $d)))
+
+;; Disjunction: (or A B) holds if either A or B holds
+(= (find-evidence-for (or $a $b) $d) (find-evidence-for $a $d))
+(= (find-evidence-for (or $a $b) $d) (find-evidence-for $b $d))
+
+;; Convenience wrapper: default depth of 3
+(= (find-evidence-for $to-prove) (find-evidence-for $to-prove (S (S (S Z)))))
 
 
-;; 4. adding propositions
+;; 4. adding propositions (universal quantification)
+;; add-proposition creates universal rules: (white swan) means ALL swans are white
 (= (add-proposition $x) (add-atom &a $x)) ; do we really need the base atom, or only its relations?
 (= (add-proposition ($attr $ob)) (add-atom &a (=> ($ob $x) ($attr $x))))
+
+;; 5. adding existential facts (no universal rule)
+;; add-existential only asserts a fact about a specific witness
+;; use for "some X are Y" — does NOT entail "all X are Y"
+(= (add-existential ($attr $witness)) (add-atom &a ($attr $witness)))
 
 
 !(add-proposition (=>

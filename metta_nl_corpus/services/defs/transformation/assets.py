@@ -64,21 +64,23 @@ def pandera_record(d: dict[Any, Any]) -> pl.DataFrame:
 
 
 def _ensure_parenthesized(code: str) -> str:
-    """Ensure each line of MeTTa code is wrapped in parentheses.
+    """Ensure each top-level line of MeTTa code is wrapped in parentheses.
 
     Bare tokens like `jumpedOver a-person airplane` are invalid and get
     wrapped as `(jumpedOver a-person airplane)`.  Lines that already start
-    with '(' or are empty are left unchanged.
+    with '(' (possibly indented) or are empty are left unchanged, preserving
+    their original indentation for multiline expressions.
     """
     lines = code.split("\n")
     fixed: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            fixed.append("")
             continue
-        # Already parenthesized or is a special form (e.g. =>)
+        # Already parenthesized or is a continuation line — preserve original formatting
         if stripped.startswith("("):
-            fixed.append(stripped)
+            fixed.append(line)
         else:
             # Bare tokens – wrap them
             logger.debug("Wrapping bare tokens in parentheses", bare_line=stripped)
