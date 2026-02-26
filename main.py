@@ -199,5 +199,13 @@ async def _run_clean_pipeline(
         )
 
 
+@cli.command(name="mcp")
+def mcp_server():
+    """Start the MCP server (stdio transport)."""
+    from metta_nl_corpus.mcp_server import mcp as mcp_app
+
+    mcp_app.run()
+
+
 if __name__ == "__main__":
     cli()
