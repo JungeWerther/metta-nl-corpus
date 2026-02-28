@@ -17,11 +17,13 @@ from structlog import get_logger
 
 from metta_nl_corpus.constants import (
     ANNOTATION_GUIDELINE_PATH,
+    ANNOTATIONS_DB_PATH,
     ANNOTATIONS_PATH,
     PROJECT_ROOT,
     VALIDATIONS_PATH,
 )
 from metta_nl_corpus.lib.helpers import parse_all
+from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import RelationKind
 
 logger = get_logger(__name__)
@@ -41,6 +43,13 @@ mcp = FastMCP(
         "from natural language sentences via add_expressions."
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# SQLite-backed annotation store (replaces parquet read-modify-write)
+# ---------------------------------------------------------------------------
+
+store = AnnotationStore(ANNOTATIONS_DB_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +137,8 @@ def add_expressions(
     annotation_id = str(uuid.uuid4())
     system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
 
-    row = pl.DataFrame(
-        [
+    try:
+        store.insert_annotation(
             {
                 "annotation_id": annotation_id,
                 "index": 0,
@@ -145,39 +154,13 @@ def add_expressions(
                 "input_tokens": None,
                 "output_tokens": None,
             }
-        ],
-        schema={
-            "annotation_id": pl.Utf8,
-            "index": pl.UInt32,
-            "premise": pl.Utf8,
-            "hypothesis": pl.Utf8,
-            "label": pl.Utf8,
-            "metta_premise": pl.Utf8,
-            "metta_hypothesis": pl.Utf8,
-            "generation_model": pl.Utf8,
-            "system_prompt": pl.Utf8,
-            "version": pl.Utf8,
-            "is_valid": pl.Boolean,
-            "input_tokens": pl.Int64,
-            "output_tokens": pl.Int64,
-        },
-    )
-
-    try:
-        if ANNOTATIONS_PATH.exists():
-            existing = pl.read_parquet(ANNOTATIONS_PATH)
-            combined = pl.concat([existing, row], how="diagonal_relaxed")
-        else:
-            ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            combined = row
-        combined.write_parquet(ANNOTATIONS_PATH)
+        )
         logger.info(
-            "Appended ontology annotation",
+            "Stored ontology annotation",
             annotation_id=annotation_id,
-            path=str(ANNOTATIONS_PATH),
         )
     except Exception as e:
-        return {"success": False, "error": f"Failed to write parquet: {e}"}
+        return {"success": False, "error": f"Failed to store annotation: {e}"}
 
     return {
         "success": True,
@@ -240,8 +223,8 @@ def execute_metta(
         annotation_id = str(uuid.uuid4())
         system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
 
-        row = pl.DataFrame(
-            [
+        try:
+            store.insert_annotation(
                 {
                     "annotation_id": annotation_id,
                     "index": 0,
@@ -257,37 +240,11 @@ def execute_metta(
                     "input_tokens": None,
                     "output_tokens": None,
                 }
-            ],
-            schema={
-                "annotation_id": pl.Utf8,
-                "index": pl.UInt32,
-                "premise": pl.Utf8,
-                "hypothesis": pl.Utf8,
-                "label": pl.Utf8,
-                "metta_premise": pl.Utf8,
-                "metta_hypothesis": pl.Utf8,
-                "generation_model": pl.Utf8,
-                "system_prompt": pl.Utf8,
-                "version": pl.Utf8,
-                "is_valid": pl.Boolean,
-                "input_tokens": pl.Int64,
-                "output_tokens": pl.Int64,
-            },
-        )
-
-        try:
-            if ANNOTATIONS_PATH.exists():
-                existing = pl.read_parquet(ANNOTATIONS_PATH)
-                combined = pl.concat([existing, row], how="diagonal_relaxed")
-            else:
-                ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-                combined = row
-            combined.write_parquet(ANNOTATIONS_PATH)
+            )
             logger.info(
                 "Stored execute_metta annotation",
                 annotation_id=annotation_id,
                 premise=premise,
-                path=str(ANNOTATIONS_PATH),
             )
             response["annotation_id"] = annotation_id
         except Exception as e:
@@ -345,8 +302,8 @@ def validate_relation(
     annotation_id = str(uuid.uuid4())
     system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
 
-    row = pl.DataFrame(
-        [
+    try:
+        store.insert_annotation(
             {
                 "annotation_id": annotation_id,
                 "index": 0,
@@ -362,37 +319,11 @@ def validate_relation(
                 "input_tokens": None,
                 "output_tokens": None,
             }
-        ],
-        schema={
-            "annotation_id": pl.Utf8,
-            "index": pl.UInt32,
-            "premise": pl.Utf8,
-            "hypothesis": pl.Utf8,
-            "label": pl.Utf8,
-            "metta_premise": pl.Utf8,
-            "metta_hypothesis": pl.Utf8,
-            "generation_model": pl.Utf8,
-            "system_prompt": pl.Utf8,
-            "version": pl.Utf8,
-            "is_valid": pl.Boolean,
-            "input_tokens": pl.Int64,
-            "output_tokens": pl.Int64,
-        },
-    )
-
-    try:
-        if ANNOTATIONS_PATH.exists():
-            existing = pl.read_parquet(ANNOTATIONS_PATH)
-            combined = pl.concat([existing, row], how="diagonal_relaxed")
-        else:
-            ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            combined = row
-        combined.write_parquet(ANNOTATIONS_PATH)
+        )
         logger.info(
             "Stored validated annotation",
             annotation_id=annotation_id,
             is_valid=is_valid,
-            path=str(ANNOTATIONS_PATH),
         )
     except Exception as e:
         logger.error("Failed to store annotation", error=str(e))
@@ -471,9 +402,9 @@ async def ask_metta_agent(
     input_tokens = getattr(usage, "input_tokens", None)
     output_tokens = getattr(usage, "output_tokens", None)
 
-    # Append to annotations parquet
-    row = pl.DataFrame(
-        [
+    # Store annotation
+    try:
+        store.insert_annotation(
             {
                 "annotation_id": str(uuid.uuid4()),
                 "index": 0,
@@ -489,35 +420,10 @@ async def ask_metta_agent(
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
-        ],
-        schema={
-            "annotation_id": pl.Utf8,
-            "index": pl.UInt32,
-            "premise": pl.Utf8,
-            "hypothesis": pl.Utf8,
-            "label": pl.Utf8,
-            "metta_premise": pl.Utf8,
-            "metta_hypothesis": pl.Utf8,
-            "generation_model": pl.Utf8,
-            "system_prompt": pl.Utf8,
-            "version": pl.Utf8,
-            "is_valid": pl.Boolean,
-            "input_tokens": pl.Int64,
-            "output_tokens": pl.Int64,
-        },
-    )
-
-    try:
-        if ANNOTATIONS_PATH.exists():
-            existing = pl.read_parquet(ANNOTATIONS_PATH)
-            combined = pl.concat([existing, row], how="diagonal_relaxed")
-        else:
-            ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            combined = row
-        combined.write_parquet(ANNOTATIONS_PATH)
-        logger.info("Appended annotation to parquet", path=str(ANNOTATIONS_PATH))
+        )
+        logger.info("Stored annotation")
     except Exception as e:
-        logger.error("Failed to append annotation", error=str(e))
+        logger.error("Failed to store annotation", error=str(e))
 
     return {
         "metta_premise": output.metta_premise,
@@ -686,33 +592,40 @@ def query_annotations(
 
     Returns matching rows as a list of dicts, plus the total count.
     """
-    path_map: dict[str, Path] = {
-        "annotations": ANNOTATIONS_PATH,
-        "validations": VALIDATIONS_PATH,
-        "cleaned": PROJECT_ROOT / "datasets" / "cleaned_annotations.parquet",
-    }
+    valid_files = {"annotations", "validations", "cleaned"}
+    if file not in valid_files:
+        return {"error": f"Unknown file '{file}'. Use: {', '.join(valid_files)}"}
 
-    path = path_map.get(file)
-    if path is None:
-        return {"error": f"Unknown file '{file}'. Use: {', '.join(path_map)}"}
-
-    if not path.exists():
-        return {"error": f"File not found: {path}"}
-
-    try:
-        df = pl.read_parquet(path)
-    except Exception as e:
-        return {"error": f"Failed to read parquet: {e}"}
-
-    if filter_column and filter_value:
-        if filter_column not in df.columns:
-            return {
-                "error": f"Column '{filter_column}' not found. Available: {df.columns}",
-            }
-        df = df.filter(pl.col(filter_column).cast(pl.Utf8) == filter_value)
-
-    total = len(df)
-    rows = df.head(limit).to_dicts()
+    # 'cleaned' still reads from parquet (separate pipeline output)
+    if file == "cleaned":
+        cleaned_path = PROJECT_ROOT / "datasets" / "cleaned_annotations.parquet"
+        if not cleaned_path.exists():
+            return {"error": f"File not found: {cleaned_path}"}
+        try:
+            df = pl.read_parquet(cleaned_path)
+        except Exception as e:
+            return {"error": f"Failed to read parquet: {e}"}
+        if filter_column and filter_value:
+            if filter_column not in df.columns:
+                return {
+                    "error": f"Column '{filter_column}' not found. Available: {df.columns}"
+                }
+            df = df.filter(pl.col(filter_column).cast(pl.Utf8) == filter_value)
+        total = len(df)
+        rows = df.head(limit).to_dicts()
+        columns = df.columns
+    else:
+        result = store.query(
+            table=file,
+            filter_column=filter_column,
+            filter_value=filter_value,
+            limit=limit,
+        )
+        if "error" in result:
+            return result
+        total = result["total"]
+        rows = result["rows"]
+        columns = result["columns"]
 
     # Truncate long string values to keep MCP response size manageable
     max_cell_len = 200
@@ -724,7 +637,7 @@ def query_annotations(
     return {
         "total": total,
         "returned": len(rows),
-        "columns": df.columns,
+        "columns": columns,
         "rows": rows,
     }
 
@@ -752,16 +665,11 @@ def update_annotation(
         validate_expressions_by_label,
     )
 
-    if not ANNOTATIONS_PATH.exists():
-        return {"error": f"Annotations file not found: {ANNOTATIONS_PATH}"}
-
-    df = pl.read_parquet(ANNOTATIONS_PATH)
-    match = df.filter(pl.col("annotation_id") == annotation_id)
-
-    if len(match) == 0:
+    existing = store.get_annotation(annotation_id)
+    if existing is None:
         return {"error": f"Annotation '{annotation_id}' not found."}
 
-    label_str = match["label"][0]
+    label_str = existing.get("label", "")
     # Normalize common typo in source data
     if label_str == "contradication":
         label_str = "contradiction"
@@ -776,41 +684,22 @@ def update_annotation(
         metta_hypothesis=metta_hypothesis.strip(),
     )
 
-    old_version = match["version"][0] or "0.0.0"
+    old_version = existing.get("version") or "0.0.0"
     human_version = (
         old_version if old_version.endswith("-human") else f"{old_version}-human"
     )
 
-    # Ensure fix_reason column exists for older parquet files
-    if "fix_reason" not in df.columns:
-        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias("fix_reason"))
-
-    df = df.with_columns(
-        [
-            pl.when(pl.col("annotation_id") == annotation_id)
-            .then(pl.lit(metta_premise.strip()))
-            .otherwise(pl.col("metta_premise"))
-            .alias("metta_premise"),
-            pl.when(pl.col("annotation_id") == annotation_id)
-            .then(pl.lit(metta_hypothesis.strip()))
-            .otherwise(pl.col("metta_hypothesis"))
-            .alias("metta_hypothesis"),
-            pl.when(pl.col("annotation_id") == annotation_id)
-            .then(pl.lit(is_valid))
-            .otherwise(pl.col("is_valid"))
-            .alias("is_valid"),
-            pl.when(pl.col("annotation_id") == annotation_id)
-            .then(pl.lit(human_version))
-            .otherwise(pl.col("version"))
-            .alias("version"),
-            pl.when(pl.col("annotation_id") == annotation_id)
-            .then(pl.lit(fix_reason))
-            .otherwise(pl.col("fix_reason"))
-            .alias("fix_reason"),
-        ]
+    store.update_annotation(
+        annotation_id,
+        {
+            "metta_premise": metta_premise.strip(),
+            "metta_hypothesis": metta_hypothesis.strip(),
+            "is_valid": is_valid,
+            "version": human_version,
+            "fix_reason": fix_reason,
+        },
     )
 
-    df.write_parquet(ANNOTATIONS_PATH)
     logger.info(
         "Updated annotation",
         annotation_id=annotation_id,
@@ -819,9 +708,65 @@ def update_annotation(
         fix_reason=fix_reason,
     )
 
-    updated = df.filter(pl.col("annotation_id") == annotation_id).to_dicts()[0]
+    updated = store.get_annotation(annotation_id)
     # Truncate system_prompt for response size
-    if "system_prompt" in updated and isinstance(updated["system_prompt"], str):
+    if (
+        updated
+        and "system_prompt" in updated
+        and isinstance(updated["system_prompt"], str)
+    ):
         updated["system_prompt"] = updated["system_prompt"][:100] + "..."
 
     return {"success": True, "is_valid": is_valid, "annotation": updated}
+
+
+@mcp.tool()
+def export_annotations_parquet(
+    table: str = "annotations",
+) -> dict[str, Any]:
+    """Export the SQLite annotation store to a parquet file.
+
+    Use this to generate parquet files for HuggingFace dataset uploads.
+
+    Args:
+        table: Which table to export — "annotations" or "validations".
+
+    Returns the export path and row count.
+    """
+    path_map = {
+        "annotations": ANNOTATIONS_PATH,
+        "validations": VALIDATIONS_PATH,
+    }
+    path = path_map.get(table)
+    if path is None:
+        return {"error": f"Unknown table '{table}'. Use: {', '.join(path_map)}"}
+
+    try:
+        count = store.export_parquet(path, table=table)
+        return {"success": True, "path": str(path), "rows": count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+def import_annotations_parquet(
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Import annotations from a parquet file into the SQLite store.
+
+    Use this to migrate existing parquet data into the new SQLite backend.
+
+    Args:
+        path: Path to parquet file. Defaults to the standard annotations.parquet.
+
+    Returns the number of rows imported.
+    """
+    parquet_path = Path(path) if path else ANNOTATIONS_PATH
+    if not parquet_path.exists():
+        return {"error": f"File not found: {parquet_path}"}
+
+    try:
+        count = store.import_parquet(parquet_path, table="annotations")
+        return {"success": True, "rows_imported": count, "source": str(parquet_path)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
