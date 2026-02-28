@@ -30,12 +30,7 @@ One way of expressing this in MeTTa would be so assign the property of "blackhai
 ```MeTTa
 ; (Predicate Object)
 (black-haired Socrates)
-
-; equivalently:
-(=> (Socrates) (black-haired))
 ```
-
-__Both expressions are valid!__
 
 # Definite versus indefinite articles
 
@@ -67,8 +62,8 @@ Examples:
 (in-the-room some-elephant)
 
 ; I knew that John was angry
-(=> (John) (human)) ; same as (human John)
-(=> my-knowledge (angry John))
+(human John)
+((angry John) my-knowledge)
 
 ; it was a day to remember
 (day the-day) ; the-day is a day
@@ -248,11 +243,51 @@ Examples:
 (, (blue-head kayley) (red-head kayley))
 ```
 
+## Ontology extraction
+
+When extracting a full ontology from a sentence (as opposed to NLI premise/hypothesis pairs), aim to capture **everything** the sentence implies — not just what it literally says.
+
+### What to extract
+
+1. **Explicit concepts** — every noun, entity, named thing
+2. **Properties** — adjectives, states, qualities attributed to entities
+3. **Actions/relations** — verbs and relational predicates
+4. **Type hierarchy** — what categories entities belong to (`is-a` chains)
+5. **Implicit assumptions** — things that must be true for the sentence to make sense but aren't stated
+
+### Worked example
+
+**Sentence**: "I am free so I can do whatever I want"
+
+Concepts: speaker (Agent), freedom (State), action, want (MentalState)
+Relations: hasState, canDo, enables, wantsBy
+Implicit: freedom is a state, agents have wants, freedom enables action
+
+```MeTTa
+; Type hierarchy
+(is-a a-speaker Agent)
+(is-a Agent Thing)
+(is-a Freedom State)
+(is-a a-want Want)
+(is-a Want MentalState)
+(is-a a-action Action)
+
+; Direct properties
+(free a-speaker)
+(hasState a-speaker Freedom)
+(unrestricted a-action)
+
+; Relations
+(canDo a-speaker a-action)
+(wantsBy a-want a-speaker)
+(enables Freedom a-action)
+```
+
 ## Entailment
 
-Entailment is how we check whether a hypothesis logically follows from a set of premises. In MeTTa, entailment works through **transitivity** of the `=>` (implication) relation.
+Entailment is how we check whether a hypothesis logically follows from a set of premises. In MeTTa, entailment works through **transitivity** of predication.
 
-The key idea: when we have `(white swan)` in the space (meaning "swans are white") and `(swan this-swan)` (meaning "this-swan is a swan"), the inference engine derives `(white this-swan)` via transitivity. This is because `(white swan)` is expanded into `(=> ($x swan) ($x white))` — anything that is a swan is also white. Since `(swan this-swan)` matches, we get `(white this-swan)`.
+The key idea: when we have `(white swan)` in the space (meaning "swans are white") and `(swan this-swan)` (meaning "this-swan is a swan"), the inference engine derives `(white this-swan)` via transitivity. This is because `(white swan)` is internally expanded into a rule — anything that is a swan is also white. Since `(swan this-swan)` matches, we get `(white this-swan)`.
 
 For entailment to hold, the **premise** expressions must allow deriving the **hypothesis** expressions through inference chains.
 
@@ -272,7 +307,7 @@ Step 2 — Represent the hypothesis:
 (white this-swan)   ; this-swan is white
 ```
 
-Step 3 — Check entailment: When `(white swan)` is added to the space, the inference engine creates the rule `(=> ($x swan) ($x white))`. Since `(swan this-swan)` is in the space, the engine matches `$x = this-swan` and derives `(white this-swan)`. The hypothesis is derivable — **entailment holds**.
+Step 3 — Check entailment: When `(white swan)` is added to the space, the inference engine creates a transitive rule. Since `(swan this-swan)` is in the space, the engine matches and derives `(white this-swan)`. The hypothesis is derivable — **entailment holds**.
 
 ## Contradiction
 
@@ -328,11 +363,7 @@ Step 2 — Represent the hypothesis (negate a premise property):
 ((is-not onHorse) a-person)
 ```
 
-Step 3 — Check contradiction: Both are added to the space. The space contains `(onHorse a-person)` and `((is-not onHorse) a-person)`. The engine matches:
-```MeTTa
-(=> (, ($a $x) ((is-not $a) $x)) ⊥)
-```
-With `$a = onHorse` and `$x = a-person`, ⊥ is derived — **contradiction holds**.
+Step 3 — Check contradiction: Both are added to the space. The space contains `(onHorse a-person)` and `((is-not onHorse) a-person)`. The engine matches with `$a = onHorse` and `$x = a-person`, ⊥ is derived — **contradiction holds**.
 
 ### How to handle semantic contradictions
 
@@ -360,7 +391,7 @@ If the entities don't match, no contradiction is found:
 ((is-not mortal) Plato)
 ```
 
-Here `$x` would need to be both `Socrates` and `Plato` simultaneously, which is impossible — **no contradiction**.
+Here the engine would need `$x` to be both `Socrates` and `Plato` simultaneously, which is impossible — **no contradiction**.
 
 ## Reference: Inference Engine
 
@@ -451,6 +482,8 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
   )
   ⊥
 ))
+
+(= (is-a $x $y) ($y $x))
 
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))

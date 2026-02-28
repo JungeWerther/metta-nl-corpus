@@ -83,5 +83,7 @@
   ⊥
 ))
 
+(= (is-a $x $y) ($y $x))
+
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
