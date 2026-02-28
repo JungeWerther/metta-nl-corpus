@@ -13,43 +13,49 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+from pandera.polars import DataFrameModel
 from structlog import get_logger
 
+from metta_nl_corpus.models import Annotation, Validation
+
 logger = get_logger(__name__)
-
-# Column definitions matching the Pandera Annotation/Validation models.
-_ANNOTATIONS_COLUMNS: list[tuple[str, str]] = [
-    ("annotation_id", "TEXT PRIMARY KEY"),
-    ("idx", "INTEGER NOT NULL"),  # 'index' is reserved in SQL
-    ("premise", "TEXT"),
-    ("hypothesis", "TEXT"),
-    ("label", "TEXT"),
-    ("metta_premise", "TEXT"),
-    ("metta_hypothesis", "TEXT"),
-    ("generation_model", "TEXT"),
-    ("system_prompt", "TEXT"),
-    ("version", "TEXT"),
-    ("is_valid", "INTEGER"),  # SQLite has no native bool
-    ("input_tokens", "INTEGER"),
-    ("output_tokens", "INTEGER"),
-    ("fix_reason", "TEXT"),
-]
-
-_VALIDATIONS_COLUMNS: list[tuple[str, str]] = [
-    ("validation_id", "TEXT PRIMARY KEY"),
-    ("annotation_id", "TEXT NOT NULL"),
-    ("is_valid", "INTEGER NOT NULL"),
-    ("relation_kind", "TEXT"),
-    ("entailment_space_hash", "TEXT"),
-    ("entailment_git_commit_hash", "TEXT"),
-    ("contradiction_space_hash", "TEXT"),
-    ("contradiction_git_commit_hash", "TEXT"),
-    ("validation_timestamp", "TEXT"),
-]
 
 # Maps between the Polars/Pandera column name 'index' and the SQLite column 'idx'.
 _PL_TO_SQL = {"index": "idx"}
 _SQL_TO_PL = {"idx": "index"}
+
+# Primary key column for each table.
+_PRIMARY_KEYS = {"annotations": "annotation_id", "validations": "validation_id"}
+
+# Polars dtype string -> SQLite type.
+_DTYPE_MAP: dict[str, str] = {
+    "String": "TEXT",
+    "Utf8": "TEXT",
+    "UInt32": "INTEGER",
+    "Int64": "INTEGER",
+    "Boolean": "INTEGER",  # SQLite has no native bool
+}
+
+
+def _columns_from_model(
+    model: type[DataFrameModel],
+    pk: str,
+) -> list[tuple[str, str]]:
+    """Derive SQLite column definitions from a Pandera DataFrameModel."""
+    schema = model.to_schema()
+    columns: list[tuple[str, str]] = []
+    for name, field in schema.columns.items():
+        sql_name = _PL_TO_SQL.get(name, name)
+        sql_type = _DTYPE_MAP.get(str(field.dtype), "TEXT")
+        constraints = " PRIMARY KEY" if name == pk else ""
+        if not field.nullable and field.required and not constraints:
+            constraints = " NOT NULL"
+        columns.append((sql_name, f"{sql_type}{constraints}"))
+    return columns
+
+
+_ANNOTATIONS_COLUMNS = _columns_from_model(Annotation, _PRIMARY_KEYS["annotations"])
+_VALIDATIONS_COLUMNS = _columns_from_model(Validation, _PRIMARY_KEYS["validations"])
 
 
 class AnnotationStore:
