@@ -24,10 +24,12 @@ from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponenti
 
 from metta_nl_corpus.constants import (
     ANNOTATION_GUIDELINE_PATH,
+    ANNOTATIONS_DB_PATH,
     ANNOTATIONS_PATH,
     PROJECT_ROOT,
     VALIDATIONS_PATH,
 )
+from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.lib.helpers import (
     cleanup_metta_expression,
     parse_all,
@@ -932,10 +934,17 @@ def data_annotations(
         else new_validations
     )
 
-    # Write to disk
-    all_annotations.write_parquet(ANNOTATIONS_PATH)
+    # Write to SQLite (atomic inserts) and export parquet for compatibility
+    annotation_store = AnnotationStore(ANNOTATIONS_DB_PATH)
+    for row in new_annotations.to_dicts():
+        annotation_store.insert_annotation(row)
+    for row in new_validations.to_dicts():
+        annotation_store.insert_validation(row)
+
+    # Export to parquet for HuggingFace / backward compatibility
+    annotation_store.export_parquet(ANNOTATIONS_PATH, table="annotations")
     if not all_validations.is_empty():
-        all_validations.write_parquet(VALIDATIONS_PATH)
+        annotation_store.export_parquet(VALIDATIONS_PATH, table="validations")
 
     logger.info(
         "Completed data annotation",

@@ -9,7 +9,8 @@ from dagster import AssetExecutionContext, Config, asset
 from huggingface_hub import hf_hub_download
 from structlog import getLogger
 
-from metta_nl_corpus.constants import CLEANED_ANNOTATIONS_PATH
+from metta_nl_corpus.constants import ANNOTATIONS_DB_PATH, CLEANED_ANNOTATIONS_PATH
+from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import RelationKind
 from metta_nl_corpus.services.defs.transformation.assets import (
     get_grounding_space_versions,
@@ -239,7 +240,11 @@ def cleaned_annotations(
         valid_after=after_stats["valid"],
     )
 
-    # Write output
+    # Write cleaned data to SQLite and export parquet
+    cleaned_store = AnnotationStore(ANNOTATIONS_DB_PATH)
+    for row in df.to_dicts():
+        cleaned_store.insert_annotation(row)
+
     CLEANED_ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(CLEANED_ANNOTATIONS_PATH)
 
