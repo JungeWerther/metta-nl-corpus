@@ -141,16 +141,65 @@
    (find-evidence-for-tv $to-prove (S (S (S Z)))))
 
 ;; === Numeric contradiction ===
-;; (> X A) ∧ (< X B) where B ≤ A → ⊥
+;; Implication rules in the space + computed get-tv guards.
+;; find-evidence-for-tv uses these generically via the recursive clause.
 
-;; Boolean: computational guard inside proof search
+;; (> X A) ∧ (< X B) where B ≤ A → ⊥
+!(add-atom &a (=> (, (> $x $a) (< $x $b)) ⊥))
+(= (get-tv (=> (, (> $x $a) (< $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (> X A) ∧ (<= X B) where B ≤ A → ⊥
+!(add-atom &a (=> (, (> $x $a) (<= $x $b)) ⊥))
+(= (get-tv (=> (, (> $x $a) (<= $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) ∧ (< X B) where B ≤ A → ⊥
+!(add-atom &a (=> (, (>= $x $a) (< $x $b)) ⊥))
+(= (get-tv (=> (, (>= $x $a) (< $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) ∧ (<= X B) where B < A → ⊥  (strict: at B = A, X = A satisfies both)
+!(add-atom &a (=> (, (>= $x $a) (<= $x $b)) ⊥))
+(= (get-tv (=> (, (>= $x $a) (<= $x $b)) ⊥))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; Boolean: computational guard inside proof search (for find-evidence-for)
 (= (find-evidence-for ⊥ $d)
    (let (> $x $a) (match &a (> $x $a) (> $x $a))
      (let (< $x $b) (match &a (< $x $b) (< $x $b))
        (if (<= $b $a) ⊥ (empty)))))
 
-;; TV-aware: implication in the space + computed TV on the rule
-!(add-atom &a (=> (, (> $x $a) (< $x $b)) ⊥))
+(= (find-evidence-for ⊥ $d)
+   (let (> $x $a) (match &a (> $x $a) (> $x $a))
+     (let (<= $x $b) (match &a (<= $x $b) (<= $x $b))
+       (if (<= $b $a) ⊥ (empty)))))
 
-(= (get-tv (=> (, (> $x $a) (< $x $b)) ⊥))
-   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+(= (find-evidence-for ⊥ $d)
+   (let (>= $x $a) (match &a (>= $x $a) (>= $x $a))
+     (let (< $x $b) (match &a (< $x $b) (< $x $b))
+       (if (<= $b $a) ⊥ (empty)))))
+
+(= (find-evidence-for ⊥ $d)
+   (let (>= $x $a) (match &a (>= $x $a) (>= $x $a))
+     (let (<= $x $b) (match &a (<= $x $b) (<= $x $b))
+       (if (< $b $a) ⊥ (empty)))))
+
+;; === Complement TVs ===
+;; < is the negation of >=, > is the negation of <=
+
+(= (get-tv (>= $x $a))
+   (let (STV $s $c) (match &a (≞ (< $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (< $x $a))
+   (let (STV $s $c) (match &a (≞ (>= $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (<= $x $a))
+   (let (STV $s $c) (match &a (≞ (> $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (> $x $a))
+   (let (STV $s $c) (match &a (≞ (<= $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))

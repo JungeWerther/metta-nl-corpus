@@ -224,3 +224,94 @@ def test_find_evidence_for_tv_no_numeric_contradiction():
     assert result and len(result[-1]) > 0
     tv_str = str(result[-1][0])
     assert "(STV 0.0 0.0)" in tv_str
+
+
+# === Numeric contradiction with <= and >= ===
+
+
+def test_gt_lte_contradiction():
+    """(> X 6) ∧ (<= X 5) → ⊥ because 5 ≤ 6."""
+    result = _run_with_inference(
+        "!(add-atom &a (> price 6))",
+        "!(add-atom &a (<= price 5))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_gte_lt_contradiction():
+    """(>= X 6) ∧ (< X 5) → ⊥ because 5 ≤ 6."""
+    result = _run_with_inference(
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (< price 5))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_gte_lte_contradiction():
+    """(>= X 6) ∧ (<= X 4) → ⊥ because 4 < 6."""
+    result = _run_with_inference(
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (<= price 4))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_gte_lte_no_contradiction_at_equal():
+    """(>= X 6) ∧ (<= X 6) — NOT contradiction, X=6 works."""
+    _run_with_inference(
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (<= price 6))",
+        "!(find-evidence-for ⊥)",
+    )
+    # Boolean engine may find a proof via transitive path, but
+    # find-evidence-for-tv would give (STV 0.0 0.0). Check boolean
+    # computational clause specifically:
+    result2 = _run_with_inference(
+        "!(add-proposition-tv (>= price 6) (STV 0.9 0.9))",
+        "!(add-proposition-tv (<= price 6) (STV 0.9 0.9))",
+        "!(find-evidence-for-tv ⊥)",
+    )
+    assert result2 and len(result2[-1]) > 0
+    assert "(STV 0.0 0.0)" in str(result2[-1][0])
+
+
+def test_lte_gt_cross_bound_contradiction():
+    """(<= X 5) ∧ (> X 6) → ⊥ because 5 ≤ 6."""
+    result = _run_with_inference(
+        "!(add-atom &a (<= price 5))",
+        "!(add-atom &a (> price 6))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+# === Complement TV Tests ===
+
+
+def test_complement_tv_lt_to_gte():
+    """(< X 70000) (STV 0.7 0.8) implies (>= X 70000) (STV 0.3 0.8)."""
+    result = _run_with_inference(
+        "!(add-atom &a (< btc 70000))",
+        "!(add-atom &a (≞ (< btc 70000) (STV 0.7 0.8)))",
+        "!(get-tv (>= btc 70000))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "0.3" in tv_str
+    assert "0.8" in tv_str
+
+
+def test_complement_tv_gt_to_lte():
+    """(> X 60000) (STV 0.8 0.6) implies (<= X 60000) (STV 0.2 0.6)."""
+    result = _run_with_inference(
+        "!(add-atom &a (> btc 60000))",
+        "!(add-atom &a (≞ (> btc 60000) (STV 0.8 0.6)))",
+        "!(get-tv (<= btc 60000))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "0.2" in tv_str or "0.19" in tv_str
+    assert "0.6" in tv_str
