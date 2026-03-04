@@ -65,6 +65,57 @@ def test_expression_works_on_binary_atoms():
     )
 
 
+def test_binary_predicate_contradictions():
+    # Direct contradiction on a binary predicate
+    assert validate_expressions_are_contradictory(
+        "(held-by swan human)", "(is-not held-by swan human)"
+    )
+    assert validate_expressions_are_contradictory(
+        "(held-by swan human)", "(is-not (held-by swan human))"
+    )
+    assert validate_expressions_are_contradictory(
+        "(held-by swan human)", "((is-not held-by) swan human)"
+    )
+
+
+def test_binary_predicate_contradictions_via_transitivity():
+    # Single-hop: "this-swan is held by this-human" + "this-human is a human"
+    # entails "this-swan is held by (a) human"
+    # which contradicts "this-swan is NOT held by (a) human"
+    assert validate_expressions_are_contradictory(
+        "(held-by this-swan this-human) (human this-human)",
+        "(is-not held-by this-swan human)",
+    )
+
+
+def test_binary_type_substitution_does_not_universally_quantify():
+    # (held-by dog human) + (dog fido) does NOT entail (held-by fido human)
+    # because "dogs are held by humans" doesn't mean ALL dogs are held by humans
+    assert not validate_expressions_are_entailing(
+        "(held-by dog human) (dog fido)",
+        "(held-by fido human)",
+    )
+    # Similarly does NOT entail cross-product
+    assert not validate_expressions_are_entailing(
+        "(held-by dog human) (dog fido) (human alice)",
+        "(held-by fido alice)",
+    )
+
+
+def test_binary_type_substitution_does_not_contradict():
+    # (held-by dog human) + (dog fido) vs (is-not held-by fido human)
+    # NOT a contradiction: fido being a dog doesn't mean fido specifically is held
+    assert not validate_expressions_are_contradictory(
+        "(held-by dog human) (dog fido)",
+        "(is-not held-by fido human)",
+    )
+    # Same for cross-product
+    assert not validate_expressions_are_contradictory(
+        "(held-by dog human) (dog fido) (human alice)",
+        "(is-not held-by fido alice)",
+    )
+
+
 def test_basic_contradictions():
     assert validate_expressions_are_contradictory("(A B)", "(is-not A B)")
     assert validate_expressions_are_contradictory("(A B)", "(is-not (A B))")
