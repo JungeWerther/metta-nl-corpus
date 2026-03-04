@@ -87,6 +87,10 @@
 ;; get-tv: retrieve the truth value for a proposition
 (= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
 
+;; get-tv for derived transitive rules: (=> ($ob $x) ($attr $x)) inherits TV from ($attr $ob)
+(= (get-tv (=> ($ob $x) ($attr $x)))
+   (match &a (≞ ($attr $ob) (STV $s $c)) (STV $s $c)))
+
 ;; get-tv-or-default: returns TV if attached, (STV 1.0 1.0) if not
 ;; The default represents "no opinion" — it does not dilute or inflate
 ;; because 1.0 is the identity element for multiplication in combine-tv.
@@ -173,6 +177,26 @@
 ;; (> X A) → (is-not (< X B)) when B ≤ A
 !(add-atom &a (=> (> $x $a) (is-not (< $x $b))))
 (= (get-tv (=> (> $x $a) (is-not (< $x $b))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (<= X B) → (is-not (>= X A)) when B < A
+!(add-atom &a (=> (<= $x $b) (is-not (>= $x $a))))
+(= (get-tv (=> (<= $x $b) (is-not (>= $x $a))))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) → (is-not (<= X B)) when B < A
+!(add-atom &a (=> (>= $x $a) (is-not (<= $x $b))))
+(= (get-tv (=> (>= $x $a) (is-not (<= $x $b))))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (<= X B) → (is-not (> X A)) when B ≤ A
+!(add-atom &a (=> (<= $x $b) (is-not (> $x $a))))
+(= (get-tv (=> (<= $x $b) (is-not (> $x $a))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) → (is-not (< X B)) when B ≤ A
+!(add-atom &a (=> (>= $x $a) (is-not (< $x $b))))
+(= (get-tv (=> (>= $x $a) (is-not (< $x $b))))
    (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
 
 ;; === Complement TVs ===

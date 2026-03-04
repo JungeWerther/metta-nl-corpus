@@ -187,7 +187,12 @@ def test_find_evidence_for_tv_direct():
 
 
 def test_find_evidence_for_tv_transitive():
-    """Transitive inference propagates TV through the chain."""
+    """Transitive inference propagates TV through the chain.
+
+    Rule (=> (Dog $x) (shedsFur $x)) inherits TV from (shedsFur Dog) = (STV 0.97 0.95).
+    Hypothesis (Dog a-dog) = (STV 1.0 0.99).
+    Combined: s = 1.0 * 0.97 = 0.97, c = min(0.99, 0.95) = 0.95.
+    """
     result = _run_with_inference(
         "!(add-proposition-tv (shedsFur Dog) (STV 0.97 0.95))",
         "!(add-proposition-tv (Dog a-dog) (STV 1.0 0.99))",
@@ -196,7 +201,8 @@ def test_find_evidence_for_tv_transitive():
     assert result and len(result[-1]) > 0
     tv_str = str(result[-1][0])
     assert "≞" in tv_str
-    assert "0.99" in tv_str
+    assert "0.97" in tv_str
+    assert "0.95" in tv_str
 
 
 def test_find_evidence_for_tv_bare_propositions():
@@ -359,8 +365,11 @@ def test_disjunction_tv_propagates_through_transitivity():
     assert result and len(result[-1]) > 0
     tv_str = str(result[-1][0])
     assert "≞" in tv_str
-    # TV comes from the transitive chain: hypothesis (swan this-swan) has c=0.99
-    assert "0.99" in tv_str
+    # Rule (=> (swan $x) (white $x)) inherits TV from (white swan) = (STV 0.8 0.9)
+    # Hypothesis (swan this-swan) = (STV 1.0 0.99)
+    # Combined: s = 1.0 * 0.8 = 0.8, c = min(0.99, 0.9) = 0.9
+    assert "0.8" in tv_str
+    assert "0.9" in tv_str
 
 
 def test_disjunction_elimination_contradiction():
@@ -385,3 +394,41 @@ def test_disjunction_elimination_no_contradiction():
         "!(find-evidence-for ⊥)",
     )
     assert result and len(result[-1]) == 0
+
+
+# === Negation bridge for <=/>= (issue #2) ===
+
+
+def test_disjunction_elim_with_gte_lte():
+    """(∨ (>= price 70) (>= price 80)) with (<= price 60) → ⊥ via case analysis.
+
+    Requires negation bridge: (<= X B) → (is-not (>= X A)) when B < A.
+    """
+    result = _run_with_inference(
+        "!(add-proposition (∨ (>= price 70) (>= price 80)))",
+        "!(add-atom &a (<= price 60))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+# === TV propagation through derived rules (issue #4) ===
+
+
+def test_proposition_tv_propagates_through_derived_rule():
+    """(shedsFur Dog) (STV 0.97 0.95) should propagate strength through derived rule.
+
+    Currently add-proposition-tv attaches TV to (shedsFur Dog) but not to
+    the derived rule (=> (Dog $x) (shedsFur $x)), so the rule gets default
+    TV (STV 1.0 1.0) and the 0.97 strength is lost.
+    """
+    result = _run_with_inference(
+        "!(add-proposition-tv (shedsFur Dog) (STV 0.97 0.95))",
+        "!(add-proposition-tv (Dog a-dog) (STV 1.0 0.99))",
+        "!(find-evidence-for-tv (shedsFur a-dog))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    # The proposition's strength (0.97) should appear in the combined TV
+    # s = 1.0 * 0.97 = 0.97, c = min(0.99, 0.95) = 0.95
+    assert "0.97" in tv_str
