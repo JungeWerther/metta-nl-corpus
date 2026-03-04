@@ -545,36 +545,6 @@ async def run_pipeline(
 
 
 @mcp.tool()
-async def run_clean_pipeline(
-    hf_id: str = "JungeWerther/metta-nl-corpus-bronze-0.1",
-    filename: str = "annotations.parquet",
-) -> dict[str, Any]:
-    """Re-validate a bronze dataset through the cleaning pipeline.
-
-    Args:
-        hf_id: HuggingFace dataset ID for the bronze dataset.
-        filename: Filename within the dataset repository.
-
-    Returns execution status and result counts.
-    """
-    from metta_nl_corpus.services.pipeline_executor import PipelineExecutor
-
-    executor = PipelineExecutor()
-    result = await executor.execute_clean_pipeline(
-        hf_id=hf_id,
-        filename=filename,
-    )
-
-    return {
-        "status": result.status,
-        "cache_key": result.cache_key,
-        "annotations_path": result.annotations_path,
-        "annotations_count": result.annotations_count,
-        "error": result.error,
-    }
-
-
-@mcp.tool()
 def query_annotations(
     file: str = "annotations",
     filter_column: str | None = None,
@@ -856,7 +826,7 @@ def revalidate_annotations(
     label: str | None = None,
     save: bool = False,
     timeout: int = 5,
-    limit: int = 0,
+    limit: int = 10,
 ) -> dict[str, Any]:
     """Re-validate stored annotations against the current inference engine.
 
@@ -867,7 +837,7 @@ def revalidate_annotations(
         label: Optional label filter (e.g. "entailment", "contradiction", "neutral").
         save: Whether to persist updated is_valid flags to the DB. Default False (dry run).
         timeout: Per-row validation timeout in seconds (default 5).
-        limit: Max rows to process (0 = all).
+        limit: Max rows to process (0 = all, default 10).
 
     Returns a summary with per-row results and aggregate counts.
     """
