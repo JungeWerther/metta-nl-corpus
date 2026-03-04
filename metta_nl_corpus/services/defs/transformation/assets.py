@@ -13,7 +13,6 @@ from dagster import asset
 from dotenv import load_dotenv
 from httpx import HTTPStatusError
 from huggingface_hub.utils.tqdm import tqdm
-from hyperon import MeTTa
 from pydantic import BaseModel, model_validator
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -36,6 +35,7 @@ from metta_nl_corpus.lib.helpers import (
     to_metta_tuple,
 )
 from metta_nl_corpus.lib.interfaces import Fn
+from metta_nl_corpus.lib.runner import create_runner
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
 from metta_nl_corpus.lib.space_versioning import get_space_version
 from metta_nl_corpus.models import (
@@ -335,7 +335,7 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
     logger.info("Validating expressions", expressions=expressions_to_add_to_space)
 
     try:
-        runner = MeTTa()
+        runner = create_runner()
 
         # Read the file content
         with open(grounding_space_path, "r") as f:
