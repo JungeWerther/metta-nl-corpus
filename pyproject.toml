@@ -39,6 +39,7 @@ allow-direct-references = true
 dev = [
     "huggingface-hub[cli]>=0.34.4",
     "pre-commit>=4.3.0",
+    "pytest>=8.0",
     "dagster-webserver>=1.11.10",
 ]
 
