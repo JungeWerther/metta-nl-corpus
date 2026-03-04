@@ -1,9 +1,29 @@
 from pathlib import Path
 
+from hyperon import MeTTa
+
 from metta_nl_corpus.services.defs.transformation.assets import (
     validate_expressions_are_contradictory,
     validate_expressions_are_entailing,
 )
+
+INFERENCE_PATH = (
+    Path(__file__).parent.parent
+    / "metta_nl_corpus"
+    / "services"
+    / "spaces"
+    / "inference.metta"
+)
+
+
+def _run_with_inference(*expressions: str) -> list:
+    """Load inference.metta, run expressions, return last result."""
+    runner = MeTTa()
+    runner.run(INFERENCE_PATH.read_text())
+    result = None
+    for expr in expressions:
+        result = runner.run(expr)
+    return result
 
 
 def test_expression_entails_itself():
@@ -62,3 +82,79 @@ def test_no_contradiction():
     ).read_text()
 
     assert not validate_expressions_are_contradictory("", data, verbose=True)
+
+
+# === PLN Truth Value Tests ===
+
+
+def test_add_proposition_tv_and_get_tv():
+    result = _run_with_inference(
+        "!(add-proposition-tv (shedsFur Dog) (STV 0.97 0.95))",
+        "!(get-tv (shedsFur Dog))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "0.97" in tv_str
+    assert "0.95" in tv_str
+
+
+def test_combine_tv():
+    result = _run_with_inference(
+        "!(combine-tv (STV 0.9 0.8) (STV 0.7 0.6))",
+    )
+    tv_str = str(result[-1][0])
+    # s = 0.9 * 0.7 = 0.63, c = min(0.8, 0.6) = 0.6
+    assert "0.63" in tv_str or "0.6300" in tv_str
+
+
+# === Numeric Contradiction Tests ===
+
+
+def test_numeric_contradiction_gt_lt():
+    """(> X 60) ∧ (< X 50) → ⊥ because 50 ≤ 60."""
+    result = _run_with_inference(
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 50))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_numeric_no_contradiction_overlapping():
+    """(> X 60) ∧ (< X 70) — no contradiction, ranges overlap."""
+    result = _run_with_inference(
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 70))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert not result or len(result[-1]) == 0
+
+
+def test_numeric_contradiction_equal_bounds():
+    """(> X 60) ∧ (< X 60) → ⊥ because 60 ≤ 60."""
+    result = _run_with_inference(
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 60))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_prediction_contradiction_with_tv():
+    """BTC above 60k vs below 50k — contradicts even with truth values attached."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (> btc-price 60000) (STV 0.7 0.6))",
+        "!(add-proposition-tv (< btc-price 50000) (STV 0.3 0.4))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_prediction_no_contradiction_with_tv():
+    """BTC above 60k and below 70k — no contradiction, ranges overlap."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (> btc-price 60000) (STV 0.7 0.6))",
+        "!(add-proposition-tv (< btc-price 70000) (STV 0.8 0.5))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert not result or len(result[-1]) == 0

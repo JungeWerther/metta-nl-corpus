@@ -87,3 +87,28 @@
 
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
+
+;; === PLN Truth Values ===
+;; (≞ Proposition (STV strength confidence))
+;;   strength   ∈ [0.0, 1.0] — probability
+;;   confidence ∈ [0.0, 1.0] — weight of evidence
+
+;; add-proposition-tv: asserts a proposition into the space with an attached truth value
+(= (add-proposition-tv $prop (STV $s $c))
+   (let () (add-atom &a $prop)
+     (let () (add-atom &a (≞ $prop (STV $s $c)))
+       (≞ $prop (STV $s $c)))))
+
+;; get-tv: retrieve the truth value for a proposition
+(= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
+
+;; combine-tv: PLN deduction — s = s1 * s2, c = min(c1, c2)
+(= (combine-tv (STV $s1 $c1) (STV $s2 $c2))
+   (STV (* $s1 $s2) (if (< $c1 $c2) $c1 $c2)))
+
+;; === Numeric contradiction ===
+;; (> X A) ∧ (< X B) where B ≤ A → ⊥  (STV 1.0 1.0)
+(= (find-evidence-for ⊥ $d)
+   (let (> $x $a) (match &a (> $x $a) (> $x $a))
+     (let (< $x $b) (match &a (< $x $b) (< $x $b))
+       (if (<= $b $a) ⊥ (empty)))))

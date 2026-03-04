@@ -393,6 +393,72 @@ If the entities don't match, no contradiction is found:
 
 Here the engine would need `$x` to be both `Socrates` and `Plato` simultaneously, which is impossible — **no contradiction**.
 
+## PLN Truth Values
+
+Propositions can carry **Simple Truth Values** (STV) from PLN (Probabilistic Logic Networks). An STV has two components:
+
+- **strength** ∈ [0.0, 1.0] — the probability that the proposition is true
+- **confidence** ∈ [0.0, 1.0] — how much evidence supports that estimate
+
+Use `add-proposition-tv` to assert a proposition with a truth value:
+
+```MeTTa
+;; "BTC price above 60k by May 1st" — 70% likely, moderate confidence
+(≞ (> btc-price 60000) (STV 0.7 0.6))
+
+;; "Dogs shed fur" — very high probability, well-established
+(≞ (shedsFur Dog) (STV 0.97 0.95))
+```
+
+The TV layer is additive — propositions with TVs still participate in boolean inference (transitivity, contradiction detection). The STV is metadata that tracks uncertainty.
+
+### Combining truth values
+
+PLN deduction propagates uncertainty: `s = s1 × s2, c = min(c1, c2)`.
+
+```MeTTa
+!(combine-tv (STV 0.9 0.8) (STV 0.7 0.6))
+;; => (STV 0.63 0.6)
+```
+
+### When to use TVs
+
+- **Predictions**: "BTC above 60k" — `(STV 0.7 0.6)`
+- **Empirical claims**: "Dogs shed fur" — `(STV 0.97 0.95)`
+- **Mathematical certainties**: Use `(STV 1.0 1.0)` — these are tautological
+
+For purely logical assertions (type hierarchies, definitions), TVs are optional — the boolean layer handles them.
+
+## Numeric Contradictions
+
+The inference engine detects contradictions between numeric bounds automatically. When `(> X A)` and `(< X B)` are both asserted for the same entity, and `B ≤ A` (making the range impossible), the engine derives ⊥.
+
+```MeTTa
+;; Contradiction: nothing can be both > 60 and < 50
+(> price 60)
+(< price 50)
+;; => ⊥ (because 50 ≤ 60)
+
+;; No contradiction: > 60 and < 70 overlap (e.g., 65 satisfies both)
+(> price 60)
+(< price 70)
+;; => no ⊥
+```
+
+Use MeTTa's built-in `<` and `>` operators directly — do **not** encode thresholds into predicate names (e.g., avoid `priceAbove60k`).
+
+### Prediction market example
+
+```MeTTa
+;; Market estimates with truth values
+(≞ (> btc-price 60000) (STV 0.7 0.6))   ; 70% chance BTC > 60k
+(≞ (< btc-price 50000) (STV 0.3 0.4))   ; 30% chance BTC < 50k
+
+;; The engine detects: these two positions are mathematically contradictory
+;; (50000 ≤ 60000, so no value can satisfy both bounds)
+;; => ⊥
+```
+
 ## Reference: Inference Engine
 
 Below is the full content of the MeTTa inference engine (`inference.metta`). This is the actual code that powers entailment and contradiction detection in the pipeline:
@@ -487,6 +553,31 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
+
+;; === PLN Truth Values ===
+;; (≞ Proposition (STV strength confidence))
+;;   strength   ∈ [0.0, 1.0] — probability
+;;   confidence ∈ [0.0, 1.0] — weight of evidence
+
+;; add-proposition-tv: asserts a proposition into the space with an attached truth value
+(= (add-proposition-tv $prop (STV $s $c))
+   (let () (add-atom &a $prop)
+     (let () (add-atom &a (≞ $prop (STV $s $c)))
+       (≞ $prop (STV $s $c)))))
+
+;; get-tv: retrieve the truth value for a proposition
+(= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
+
+;; combine-tv: PLN deduction — s = s1 * s2, c = min(c1, c2)
+(= (combine-tv (STV $s1 $c1) (STV $s2 $c2))
+   (STV (* $s1 $s2) (if (< $c1 $c2) $c1 $c2)))
+
+;; === Numeric contradiction ===
+;; (> X A) ∧ (< X B) where B ≤ A → ⊥  (STV 1.0 1.0)
+(= (find-evidence-for ⊥ $d)
+   (let (> $x $a) (match &a (> $x $a) (> $x $a))
+     (let (< $x $b) (match &a (< $x $b) (< $x $b))
+       (if (<= $b $a) ⊥ (empty)))))
 ```
 
 When generating a MeTTa expression, always wrap your final result in a single MeTTa code block: ```MeTTa\n```.
