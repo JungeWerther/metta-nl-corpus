@@ -158,3 +158,57 @@ def test_prediction_no_contradiction_with_tv():
         "!(find-evidence-for ⊥)",
     )
     assert not result or len(result[-1]) == 0
+
+
+# === find-evidence-for-tv Tests ===
+
+
+def test_find_evidence_for_tv_direct():
+    """Direct TV lookup via find-evidence-for-tv."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (shedsFur Dog) (STV 0.97 0.95))",
+        "!(find-evidence-for-tv (shedsFur Dog))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "≞" in tv_str
+    assert "0.97" in tv_str
+
+
+def test_find_evidence_for_tv_transitive():
+    """Transitive inference propagates TV through the chain."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (shedsFur Dog) (STV 0.97 0.95))",
+        "!(add-proposition-tv (Dog a-dog) (STV 1.0 0.99))",
+        "!(find-evidence-for-tv (shedsFur a-dog))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "≞" in tv_str
+    assert "0.99" in tv_str
+
+
+def test_find_evidence_for_tv_contradiction():
+    """Numeric contradiction returns (≞ ⊥ (STV s c)) with combined TVs."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (> btc 60000) (STV 0.7 0.6))",
+        "!(add-proposition-tv (< btc 50000) (STV 0.3 0.4))",
+        "!(find-evidence-for-tv ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "≞" in tv_str
+    assert "⊥" in tv_str
+    assert "0.21" in tv_str or "0.2100" in tv_str
+
+
+def test_find_evidence_for_tv_bare_propositions():
+    """Bare propositions (no TV) default to (STV 1.0 1.0)."""
+    result = _run_with_inference(
+        "!(add-proposition (white swan))",
+        "!(add-proposition (swan this-swan))",
+        "!(find-evidence-for-tv (white this-swan))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "1.0" in tv_str
