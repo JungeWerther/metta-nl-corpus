@@ -841,15 +841,13 @@ def revalidate_annotations(
 
     Returns a summary with per-row results and aggregate counts.
     """
-    import multiprocessing
-
     from metta_nl_corpus.services.defs.cleaning.assets import (
-        _run_validation,
         has_bad_syntax,
         migrate_not_to_is_not,
     )
     from metta_nl_corpus.services.defs.transformation.assets import (
         get_grounding_space_versions,
+        validate_expressions_by_label,
     )
 
     conn = store._get_conn()
@@ -916,26 +914,14 @@ def revalidate_annotations(
         except ValueError:
             rel = RelationKind.NEUTRAL
 
-        # Validate with subprocess timeout
-        queue: multiprocessing.Queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(
-            target=_run_validation,
-            args=(rel.value, premise, hypothesis, queue),
-        )
-        proc.start()
-        proc.join(timeout=timeout)
-
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
-            is_valid = False
-            status = "timeout"
-        elif not queue.empty():
-            is_valid = queue.get_nowait()
+        # Validate directly in-process (like the tests do)
+        try:
+            is_valid = validate_expressions_by_label(rel, premise, hypothesis)
             status = "valid" if is_valid else "invalid"
-        else:
+        except Exception as e:
             is_valid = False
             status = "error"
+            logger.warning("Validation error", annotation_id=aid, error=str(e))
 
         old_valid = row.get("is_valid", False)
         changed = old_valid != is_valid
