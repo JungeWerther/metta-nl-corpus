@@ -87,3 +87,36 @@
 
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
+
+;; === PLN Truth Values ===
+;; (≞ Proposition (STV strength confidence))
+;;   strength   ∈ [0.0, 1.0] — probability
+;;   confidence ∈ [0.0, 1.0] — weight of evidence
+
+;; add-proposition-tv: adds both the boolean proposition AND its truth value
+(= (add-proposition-tv ($attr $ob) (STV $s $c))
+   (let () (add-proposition ($attr $ob))
+     (let () (add-atom &a (≞ ($attr $ob) (STV $s $c)))
+       (≞ ($attr $ob) (STV $s $c)))))
+
+;; get-tv: retrieve the truth value for a proposition
+(= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
+
+;; combine-tv: PLN deduction — s = s1 * s2, c = min(c1, c2)
+(= (combine-tv (STV $s1 $c1) (STV $s2 $c2))
+   (STV (* $s1 $s2) (if (< $c1 $c2) $c1 $c2)))
+
+;; find-evidence-for-tv: returns (≞ proposition (STV s c)) if TV exists
+(= (find-evidence-for-tv $expr)
+   (let $ev (find-evidence-for $expr)
+     (let $tv (get-tv $expr)
+       (≞ $ev $tv))))
+
+;; contraryAttribute: two predicates that cannot both hold on the same entity
+(= (add-contrary $a $b)
+   (add-atom &a (contraryAttribute $a $b)))
+
+;; Contradiction rules for contrary attributes
+!(add-proposition (=> (, (contraryAttribute $a $b) ($a $x) ($b $x)) ⊥))
+;; Symmetric
+!(add-proposition (=> (, (contraryAttribute $a $b) ($b $x) ($a $x)) ⊥))
