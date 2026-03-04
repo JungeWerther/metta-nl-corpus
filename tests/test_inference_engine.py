@@ -121,13 +121,14 @@ def test_numeric_contradiction_gt_lt():
 
 
 def test_numeric_no_contradiction_overlapping():
-    """(> X 60) ∧ (< X 70) — no contradiction, ranges overlap."""
+    """(> X 60) ∧ (< X 70) — TV is (STV 0.0 0.0) because ranges overlap."""
     result = _run_with_inference(
-        "!(add-atom &a (> price 60))",
-        "!(add-atom &a (< price 70))",
-        "!(find-evidence-for ⊥)",
+        "!(add-proposition-tv (> price 60) (STV 0.9 0.9))",
+        "!(add-proposition-tv (< price 70) (STV 0.9 0.9))",
+        "!(find-evidence-for-tv ⊥)",
     )
-    assert not result or len(result[-1]) == 0
+    assert result and len(result[-1]) > 0
+    assert "(STV 0.0 0.0)" in str(result[-1][0])
 
 
 def test_numeric_contradiction_equal_bounds():
@@ -151,13 +152,14 @@ def test_prediction_contradiction_with_tv():
 
 
 def test_prediction_no_contradiction_with_tv():
-    """BTC above 60k and below 70k — no contradiction, ranges overlap."""
+    """BTC above 60k and below 70k — TV is (STV 0.0 0.0) because ranges overlap."""
     result = _run_with_inference(
         "!(add-proposition-tv (> btc-price 60000) (STV 0.7 0.6))",
         "!(add-proposition-tv (< btc-price 70000) (STV 0.8 0.5))",
-        "!(find-evidence-for ⊥)",
+        "!(find-evidence-for-tv ⊥)",
     )
-    assert not result or len(result[-1]) == 0
+    assert result and len(result[-1]) > 0
+    assert "(STV 0.0 0.0)" in str(result[-1][0])
 
 
 # === find-evidence-for-tv Tests ===
@@ -189,12 +191,36 @@ def test_find_evidence_for_tv_transitive():
 
 
 def test_find_evidence_for_tv_bare_propositions():
-    """Bare propositions (no TV) default to (STV 1.0 1.0)."""
+    """Bare propositions (no TV) get default (STV 1.0 1.0) — identity element."""
     result = _run_with_inference(
         "!(add-proposition (white swan))",
         "!(add-proposition (swan this-swan))",
         "!(find-evidence-for-tv (white this-swan))",
     )
     assert result and len(result[-1]) > 0
+    assert "(STV 1.0 1.0)" in str(result[-1][0])
+
+
+def test_find_evidence_for_tv_numeric_contradiction():
+    """Numeric contradiction returns (≞ ⊥ (STV s c)) with combined TVs."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (> btc 60000) (STV 0.7 0.6))",
+        "!(add-proposition-tv (< btc 50000) (STV 0.3 0.4))",
+        "!(find-evidence-for-tv ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+    all_results = str(result[-1])
+    assert "≞" in all_results
+    assert "0.21" in all_results or "0.2100" in all_results
+
+
+def test_find_evidence_for_tv_no_numeric_contradiction():
+    """Overlapping ranges: rule TV is (STV 0.0 0.0), zeroes out the result."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (> btc 60000) (STV 0.7 0.6))",
+        "!(add-proposition-tv (< btc 70000) (STV 0.8 0.5))",
+        "!(find-evidence-for-tv ⊥)",
+    )
+    assert result and len(result[-1]) > 0
     tv_str = str(result[-1][0])
-    assert "1.0" in tv_str
+    assert "(STV 0.0 0.0)" in tv_str
