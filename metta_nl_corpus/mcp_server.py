@@ -763,3 +763,168 @@ def import_annotations_parquet(
         return {"success": True, "rows_imported": count, "source": str(parquet_path)}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+def revalidate_annotations(
+    label: str | None = None,
+    save: bool = False,
+    timeout: int = 5,
+    limit: int = 0,
+) -> dict[str, Any]:
+    """Re-validate stored annotations against the current inference engine.
+
+    Runs validate_expressions_by_label on each annotation and returns a
+    summary of results. Only persists changes when save=True.
+
+    Args:
+        label: Optional label filter (e.g. "entailment", "contradiction", "neutral").
+        save: Whether to persist updated is_valid flags to the DB. Default False (dry run).
+        timeout: Per-row validation timeout in seconds (default 5).
+        limit: Max rows to process (0 = all).
+
+    Returns a summary with per-row results and aggregate counts.
+    """
+    import multiprocessing
+
+    from metta_nl_corpus.services.defs.cleaning.assets import (
+        _run_validation,
+        has_bad_syntax,
+        migrate_not_to_is_not,
+    )
+    from metta_nl_corpus.services.defs.transformation.assets import (
+        get_grounding_space_versions,
+    )
+
+    conn = store._get_conn()
+
+    query = "SELECT * FROM annotations"
+    params: list[str] = []
+    if label:
+        query += " WHERE label = ?"
+        params.append(label)
+    if limit > 0:
+        query += " LIMIT ?"
+        params.append(str(limit))
+
+    rows = [
+        store._row_to_dict(dict(r), source="annotations")
+        for r in conn.execute(query, params).fetchall()
+    ]
+
+    if not rows:
+        return {"error": "No annotations found matching filter."}
+
+    (
+        contradictions_code_hash,
+        contradictions_git_hash,
+        entailments_code_hash,
+        entailments_git_hash,
+    ) = get_grounding_space_versions()
+
+    results: list[dict[str, Any]] = []
+    counts = {"total": len(rows), "valid": 0, "invalid": 0, "skipped": 0, "changed": 0}
+
+    for i, row in enumerate(rows):
+        aid = row["annotation_id"]
+        premise = row.get("metta_premise")
+        hypothesis = row.get("metta_hypothesis")
+        row_label = row.get("label", "")
+
+        # Skip rows without both expressions
+        if not premise or not hypothesis:
+            results.append(
+                {
+                    "annotation_id": aid,
+                    "status": "skipped",
+                    "reason": "missing_expressions",
+                }
+            )
+            counts["skipped"] += 1
+            continue
+
+        # Skip bad syntax
+        if has_bad_syntax(premise) or has_bad_syntax(hypothesis):
+            results.append(
+                {"annotation_id": aid, "status": "skipped", "reason": "bad_syntax"}
+            )
+            counts["skipped"] += 1
+            continue
+
+        # Migrate (not ...) → (is-not ...)
+        premise = migrate_not_to_is_not(premise)
+        hypothesis = migrate_not_to_is_not(hypothesis)
+
+        try:
+            rel = RelationKind(row_label)
+        except ValueError:
+            rel = RelationKind.NEUTRAL
+
+        # Validate with subprocess timeout
+        queue: multiprocessing.Queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_run_validation,
+            args=(rel.value, premise, hypothesis, queue),
+        )
+        proc.start()
+        proc.join(timeout=timeout)
+
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+            is_valid = False
+            status = "timeout"
+        elif not queue.empty():
+            is_valid = queue.get_nowait()
+            status = "valid" if is_valid else "invalid"
+        else:
+            is_valid = False
+            status = "error"
+
+        old_valid = row.get("is_valid", False)
+        changed = old_valid != is_valid
+
+        if is_valid:
+            counts["valid"] += 1
+        else:
+            counts["invalid"] += 1
+        if changed:
+            counts["changed"] += 1
+
+        entry: dict[str, Any] = {
+            "annotation_id": aid,
+            "label": row_label,
+            "status": status,
+            "was_valid": old_valid,
+            "is_valid": is_valid,
+            "changed": changed,
+        }
+        results.append(entry)
+
+        if save and (changed or premise != row.get("metta_premise")):
+            store.update_annotation(
+                aid,
+                {
+                    "metta_premise": premise,
+                    "metta_hypothesis": hypothesis,
+                    "is_valid": is_valid,
+                },
+            )
+
+        if (i + 1) % 50 == 0:
+            logger.info("Revalidation progress", current=i + 1, total=len(rows))
+
+    logger.info("Revalidation complete", save=save, **counts)
+
+    return {
+        "save": save,
+        "space_versions": {
+            "entailment_hash": entailments_code_hash,
+            "entailment_git": entailments_git_hash,
+            "contradiction_hash": contradictions_code_hash,
+            "contradiction_git": contradictions_git_hash,
+        },
+        "counts": counts,
+        "results": results[:100],
+        "truncated": len(results) > 100,
+    }
