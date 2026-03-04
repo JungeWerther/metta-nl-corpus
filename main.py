@@ -199,6 +199,19 @@ async def _run_clean_pipeline(
         )
 
 
+@cli.command()
+@click.option("--port", default=8090, type=int, help="Port for the HTTP API server")
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
+def serve(port: int, host: str):
+    """Start the HTTP annotation API server."""
+    import uvicorn
+
+    from metta_nl_corpus.http_server import create_app
+
+    app = create_app()
+    uvicorn.run(app, host=host, port=port)
+
+
 @cli.command(name="mcp")
 def mcp_server():
     """Start the MCP server (stdio transport)."""
