@@ -121,9 +121,17 @@
      (let (≞ $ey $tvy) (find-evidence-for-tv $y $d)
        (≞ (, $ex $ey) (combine-tv $tvx $tvy)))))
 
-;; Disjunction: (or A B) holds if either A or B holds
-(= (find-evidence-for-tv (or $a $b) $d) (find-evidence-for-tv $a $d))
-(= (find-evidence-for-tv (or $a $b) $d) (find-evidence-for-tv $b $d))
+;; Disjunction introduction: (∨ A B) holds if either A or B holds
+(= (find-evidence-for-tv (∨ $a $b) $d) (find-evidence-for-tv $a $d))
+(= (find-evidence-for-tv (∨ $a $b) $d) (find-evidence-for-tv $b $d))
+
+;; Disjunction elimination via classical equivalence: A ∨ B ≡ ¬A → B ≡ ¬B → A
+;; add-proposition (∨ A B) adds the ∨ plus both implication directions,
+;; enabling the recursive clause to derive either branch via is-not.
+(= (add-proposition (∨ $a $b))
+   (let () (add-atom &a (∨ $a $b))
+     (let () (add-atom &a (=> (is-not $a) $b))
+       (add-atom &a (=> (is-not $b) $a)))))
 
 ;; Convenience wrapper: default depth of 3
 (= (find-evidence-for-tv $to-prove)
@@ -152,6 +160,20 @@
 !(add-atom &a (=> (, (>= $x $a) (<= $x $b)) ⊥))
 (= (get-tv (=> (, (>= $x $a) (<= $x $b)) ⊥))
    (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; === Negation bridge for numeric comparisons ===
+;; Connects < / > facts to is-not of the opposite comparison,
+;; enabling ∨-elimination via the recursive clause.
+
+;; (< X B) → (is-not (> X A)) when B ≤ A
+!(add-atom &a (=> (< $x $b) (is-not (> $x $a))))
+(= (get-tv (=> (< $x $b) (is-not (> $x $a))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (> X A) → (is-not (< X B)) when B ≤ A
+!(add-atom &a (=> (> $x $a) (is-not (< $x $b))))
+(= (get-tv (=> (> $x $a) (is-not (< $x $b))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
 
 ;; === Complement TVs ===
 ;; < is the negation of >=, > is the negation of <=
