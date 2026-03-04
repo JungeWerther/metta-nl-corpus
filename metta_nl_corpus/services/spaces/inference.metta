@@ -24,27 +24,12 @@
 (= (all $expr) (match &a $expr $expr))
 (= (all $expr $out) (match &a $expr $out))
 
-;; 3. find proofs for $to-prove (depth-bounded)
-;; Base: direct match at any depth
-(= (find-evidence-for $to-prove $d) (match &a $to-prove $to-prove))
-
-;; Recursive: one step of transitive chaining (requires depth > 0)
-(= (find-evidence-for $to-prove (S $k)) (=>
-  (let $hypothesis (match &a (=> $x $to-prove) $x)
-      (find-evidence-for $hypothesis $k)
-  )
-  $to-prove
-))
-
-;; Conjunction
-(= (find-evidence-for (, $x $y) $d) (, (find-evidence-for $x $d) (find-evidence-for $y $d)))
-
-;; Disjunction: (or A B) holds if either A or B holds
-(= (find-evidence-for (or $a $b) $d) (find-evidence-for $a $d))
-(= (find-evidence-for (or $a $b) $d) (find-evidence-for $b $d))
-
-;; Convenience wrapper: default depth of 3
-(= (find-evidence-for $to-prove) (find-evidence-for $to-prove (S (S (S Z)))))
+;; 3. find-evidence-for: boolean wrapper around find-evidence-for-tv
+;; Returns evidence only when strength > 0 (i.e. the proof is valid).
+;; All proof logic lives in find-evidence-for-tv below.
+(= (find-evidence-for $to-prove)
+   (let (≞ $ev (STV $s $c)) (find-evidence-for-tv $to-prove)
+     (if (> $s 0.0) $ev (empty))))
 
 
 ;; 4. adding propositions (universal quantification)
@@ -135,6 +120,10 @@
    (let (≞ $ex $tvx) (find-evidence-for-tv $x $d)
      (let (≞ $ey $tvy) (find-evidence-for-tv $y $d)
        (≞ (, $ex $ey) (combine-tv $tvx $tvy)))))
+
+;; Disjunction: (or A B) holds if either A or B holds
+(= (find-evidence-for-tv (or $a $b) $d) (find-evidence-for-tv $a $d))
+(= (find-evidence-for-tv (or $a $b) $d) (find-evidence-for-tv $b $d))
 
 ;; Convenience wrapper: default depth of 3
 (= (find-evidence-for-tv $to-prove)

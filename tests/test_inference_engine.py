@@ -110,6 +110,17 @@ def test_combine_tv():
 # === Numeric Contradiction Tests ===
 
 
+def _assert_contradiction_tv(result, expected_nonzero=True):
+    """Check that find-evidence-for-tv ⊥ returns meaningful STV."""
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "≞" in tv_str
+    if expected_nonzero:
+        assert "(STV 0.0 0.0)" not in tv_str
+    else:
+        assert "(STV 0.0 0.0)" in tv_str
+
+
 def test_numeric_contradiction_gt_lt():
     """(> X 60) ∧ (< X 50) → ⊥ because 50 ≤ 60."""
     result = _run_with_inference(
@@ -121,14 +132,13 @@ def test_numeric_contradiction_gt_lt():
 
 
 def test_numeric_no_contradiction_overlapping():
-    """(> X 60) ∧ (< X 70) — TV is (STV 0.0 0.0) because ranges overlap."""
+    """(> X 60) ∧ (< X 70) — no contradiction because ranges overlap."""
     result = _run_with_inference(
-        "!(add-proposition-tv (> price 60) (STV 0.9 0.9))",
-        "!(add-proposition-tv (< price 70) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 70))",
+        "!(find-evidence-for ⊥)",
     )
-    assert result and len(result[-1]) > 0
-    assert "(STV 0.0 0.0)" in str(result[-1][0])
+    assert result and len(result[-1]) == 0
 
 
 def test_numeric_contradiction_equal_bounds():
@@ -142,13 +152,13 @@ def test_numeric_contradiction_equal_bounds():
 
 
 def test_prediction_contradiction_with_tv():
-    """BTC above 60k vs below 50k — contradicts even with truth values attached."""
+    """BTC above 60k vs below 50k — contradiction with combined TVs."""
     result = _run_with_inference(
         "!(add-proposition-tv (> btc-price 60000) (STV 0.7 0.6))",
         "!(add-proposition-tv (< btc-price 50000) (STV 0.3 0.4))",
-        "!(find-evidence-for ⊥)",
+        "!(find-evidence-for-tv ⊥)",
     )
-    assert result and len(result[-1]) > 0
+    _assert_contradiction_tv(result, expected_nonzero=True)
 
 
 def test_prediction_no_contradiction_with_tv():
@@ -158,8 +168,7 @@ def test_prediction_no_contradiction_with_tv():
         "!(add-proposition-tv (< btc-price 70000) (STV 0.8 0.5))",
         "!(find-evidence-for-tv ⊥)",
     )
-    assert result and len(result[-1]) > 0
-    assert "(STV 0.0 0.0)" in str(result[-1][0])
+    _assert_contradiction_tv(result, expected_nonzero=False)
 
 
 # === find-evidence-for-tv Tests ===
@@ -261,21 +270,12 @@ def test_gte_lte_contradiction():
 
 def test_gte_lte_no_contradiction_at_equal():
     """(>= X 6) ∧ (<= X 6) — NOT contradiction, X=6 works."""
-    _run_with_inference(
+    result = _run_with_inference(
         "!(add-atom &a (>= price 6))",
         "!(add-atom &a (<= price 6))",
         "!(find-evidence-for ⊥)",
     )
-    # Boolean engine may find a proof via transitive path, but
-    # find-evidence-for-tv would give (STV 0.0 0.0). Check boolean
-    # computational clause specifically:
-    result2 = _run_with_inference(
-        "!(add-proposition-tv (>= price 6) (STV 0.9 0.9))",
-        "!(add-proposition-tv (<= price 6) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
-    )
-    assert result2 and len(result2[-1]) > 0
-    assert "(STV 0.0 0.0)" in str(result2[-1][0])
+    assert result and len(result[-1]) == 0
 
 
 def test_lte_gt_cross_bound_contradiction():
