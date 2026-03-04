@@ -605,20 +605,10 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 
 ;; === Numeric contradiction ===
 ;; (> X A) ∧ (< X B) where B ≤ A → ⊥
-
-;; Boolean: returns bare ⊥
 (= (find-evidence-for ⊥ $d)
    (let (> $x $a) (match &a (> $x $a) (> $x $a))
      (let (< $x $b) (match &a (< $x $b) (< $x $b))
        (if (<= $b $a) ⊥ (empty)))))
-
-;; TV-aware: returns (≞ ⊥ (STV s c)) with combined TVs of the bounds
-(= (find-evidence-for-tv ⊥ $d)
-   (let (> $x $a) (match &a (> $x $a) (> $x $a))
-     (let (< $x $b) (match &a (< $x $b) (< $x $b))
-       (if (<= $b $a)
-         (≞ ⊥ (combine-tv (get-tv-or-default (> $x $a)) (get-tv-or-default (< $x $b))))
-         (empty)))))
 ```
 
 When generating a MeTTa expression, always wrap your final result in a single MeTTa code block: ```MeTTa\n```.

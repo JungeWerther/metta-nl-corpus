@@ -188,20 +188,6 @@ def test_find_evidence_for_tv_transitive():
     assert "0.99" in tv_str
 
 
-def test_find_evidence_for_tv_contradiction():
-    """Numeric contradiction returns (≞ ⊥ (STV s c)) with combined TVs."""
-    result = _run_with_inference(
-        "!(add-proposition-tv (> btc 60000) (STV 0.7 0.6))",
-        "!(add-proposition-tv (< btc 50000) (STV 0.3 0.4))",
-        "!(find-evidence-for-tv ⊥)",
-    )
-    assert result and len(result[-1]) > 0
-    tv_str = str(result[-1][0])
-    assert "≞" in tv_str
-    assert "⊥" in tv_str
-    assert "0.21" in tv_str or "0.2100" in tv_str
-
-
 def test_find_evidence_for_tv_bare_propositions():
     """Bare propositions (no TV) default to (STV 1.0 1.0)."""
     result = _run_with_inference(

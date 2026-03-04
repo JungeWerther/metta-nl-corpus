@@ -29,12 +29,6 @@
 !(add-proposition-tv (> btc-price 60000) (STV 0.7 0.6))
 !(add-proposition-tv (< btc-price 50000) (STV 0.3 0.4))
 
-;; Boolean: detects contradiction
+;; Numeric contradiction: 50000 ≤ 60000, so these bounds are impossible
 !(find-evidence-for ⊥)
 ;; Expected: ⊥
-
-;; TV-aware: contradiction with combined truth value
-!(find-evidence-for-tv ⊥)
-;; Expected: (≞ ⊥ (STV 0.21 0.4))
-;; s = 0.7 * 0.3 = 0.21 (joint probability of both positions)
-;; c = min(0.6, 0.4) = 0.4 (weakest evidence)
