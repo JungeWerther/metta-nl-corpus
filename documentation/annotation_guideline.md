@@ -490,27 +490,12 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 (= (all $expr) (match &a $expr $expr))
 (= (all $expr $out) (match &a $expr $out))
 
-;; 3. find proofs for $to-prove (depth-bounded)
-;; Base: direct match at any depth
-(= (find-evidence-for $to-prove $d) (match &a $to-prove $to-prove))
-
-;; Recursive: one step of transitive chaining (requires depth > 0)
-(= (find-evidence-for $to-prove (S $k)) (=>
-  (let $hypothesis (match &a (=> $x $to-prove) $x)
-      (find-evidence-for $hypothesis $k)
-  )
-  $to-prove
-))
-
-;; Conjunction
-(= (find-evidence-for (, $x $y) $d) (, (find-evidence-for $x $d) (find-evidence-for $y $d)))
-
-;; Disjunction: (or A B) holds if either A or B holds
-(= (find-evidence-for (or $a $b) $d) (find-evidence-for $a $d))
-(= (find-evidence-for (or $a $b) $d) (find-evidence-for $b $d))
-
-;; Convenience wrapper: default depth of 3
-(= (find-evidence-for $to-prove) (find-evidence-for $to-prove (S (S (S Z)))))
+;; 3. find-evidence-for: boolean wrapper around find-evidence-for-tv
+;; Returns evidence only when strength > 0 (i.e. the proof is valid).
+;; All proof logic lives in find-evidence-for-tv below.
+(= (find-evidence-for $to-prove)
+   (let (≞ $ev (STV $s $c)) (find-evidence-for-tv $to-prove)
+     (if (> $s 0.0) $ev (empty))))
 
 
 ;; 4. adding propositions (universal quantification)
@@ -568,8 +553,13 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
 ;; get-tv: retrieve the truth value for a proposition
 (= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
 
+;; get-tv for derived transitive rules: (=> ($ob $x) ($attr $x)) inherits TV from ($attr $ob)
+(= (get-tv (=> ($ob $x) ($attr $x)))
+   (match &a (≞ ($attr $ob) (STV $s $c)) (STV $s $c)))
+
 ;; get-tv-or-default: returns TV if attached, (STV 1.0 1.0) if not
-;; The default is the identity element for combine-tv multiplication.
+;; The default represents "no opinion" — it does not dilute or inflate
+;; because 1.0 is the identity element for multiplication in combine-tv.
 (= (get-tv-or-default $expr)
    (case (get-tv $expr)
      (((STV $s $c) (STV $s $c))
@@ -601,24 +591,98 @@ Below is the full content of the MeTTa inference engine (`inference.metta`). Thi
      (let (≞ $ey $tvy) (find-evidence-for-tv $y $d)
        (≞ (, $ex $ey) (combine-tv $tvx $tvy)))))
 
+;; Disjunction introduction: (∨ A B) holds if either A or B holds
+(= (find-evidence-for-tv (∨ $a $b) $d) (find-evidence-for-tv $a $d))
+(= (find-evidence-for-tv (∨ $a $b) $d) (find-evidence-for-tv $b $d))
+
+;; Disjunction elimination via classical equivalence: A ∨ B ≡ ¬A → B ≡ ¬B → A
+;; add-proposition (∨ A B) adds the ∨ plus both implication directions,
+;; enabling the recursive clause to derive either branch via is-not.
+(= (add-proposition (∨ $a $b))
+   (let () (add-atom &a (∨ $a $b))
+     (let () (add-atom &a (=> (is-not $a) $b))
+       (add-atom &a (=> (is-not $b) $a)))))
+
 ;; Convenience wrapper: default depth of 3
 (= (find-evidence-for-tv $to-prove)
    (find-evidence-for-tv $to-prove (S (S (S Z)))))
 
 ;; === Numeric contradiction ===
+;; Implication rules in the space + computed get-tv guards.
+;; find-evidence-for-tv uses these generically via the recursive clause.
+
 ;; (> X A) ∧ (< X B) where B ≤ A → ⊥
-
-;; Boolean: computational guard inside proof search
-(= (find-evidence-for ⊥ $d)
-   (let (> $x $a) (match &a (> $x $a) (> $x $a))
-     (let (< $x $b) (match &a (< $x $b) (< $x $b))
-       (if (<= $b $a) ⊥ (empty)))))
-
-;; TV-aware: implication in the space + computed TV on the rule
 !(add-atom &a (=> (, (> $x $a) (< $x $b)) ⊥))
-
 (= (get-tv (=> (, (> $x $a) (< $x $b)) ⊥))
    (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (> X A) ∧ (<= X B) where B ≤ A → ⊥
+!(add-atom &a (=> (, (> $x $a) (<= $x $b)) ⊥))
+(= (get-tv (=> (, (> $x $a) (<= $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) ∧ (< X B) where B ≤ A → ⊥
+!(add-atom &a (=> (, (>= $x $a) (< $x $b)) ⊥))
+(= (get-tv (=> (, (>= $x $a) (< $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) ∧ (<= X B) where B < A → ⊥  (strict: at B = A, X = A satisfies both)
+!(add-atom &a (=> (, (>= $x $a) (<= $x $b)) ⊥))
+(= (get-tv (=> (, (>= $x $a) (<= $x $b)) ⊥))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; === Negation bridge for numeric comparisons ===
+;; Connects < / > / <= / >= facts to is-not of the opposite comparison,
+;; enabling ∨-elimination via the recursive clause.
+
+;; (< X B) → (is-not (> X A)) when B ≤ A
+!(add-atom &a (=> (< $x $b) (is-not (> $x $a))))
+(= (get-tv (=> (< $x $b) (is-not (> $x $a))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (> X A) → (is-not (< X B)) when B ≤ A
+!(add-atom &a (=> (> $x $a) (is-not (< $x $b))))
+(= (get-tv (=> (> $x $a) (is-not (< $x $b))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (<= X B) → (is-not (>= X A)) when B < A
+!(add-atom &a (=> (<= $x $b) (is-not (>= $x $a))))
+(= (get-tv (=> (<= $x $b) (is-not (>= $x $a))))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) → (is-not (<= X B)) when B < A
+!(add-atom &a (=> (>= $x $a) (is-not (<= $x $b))))
+(= (get-tv (=> (>= $x $a) (is-not (<= $x $b))))
+   (if (< $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (<= X B) → (is-not (> X A)) when B ≤ A
+!(add-atom &a (=> (<= $x $b) (is-not (> $x $a))))
+(= (get-tv (=> (<= $x $b) (is-not (> $x $a))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; (>= X A) → (is-not (< X B)) when B ≤ A
+!(add-atom &a (=> (>= $x $a) (is-not (< $x $b))))
+(= (get-tv (=> (>= $x $a) (is-not (< $x $b))))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
+
+;; === Complement TVs ===
+;; < is the negation of >=, > is the negation of <=
+
+(= (get-tv (>= $x $a))
+   (let (STV $s $c) (match &a (≞ (< $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (< $x $a))
+   (let (STV $s $c) (match &a (≞ (>= $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (<= $x $a))
+   (let (STV $s $c) (match &a (≞ (> $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
+
+(= (get-tv (> $x $a))
+   (let (STV $s $c) (match &a (≞ (<= $x $a) (STV $s $c)) (STV $s $c))
+     (STV (- 1.0 $s) $c)))
 ```
 
 When generating a MeTTa expression, always wrap your final result in a single MeTTa code block: ```MeTTa\n```.
