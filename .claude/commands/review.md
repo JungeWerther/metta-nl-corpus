@@ -1,10 +1,12 @@
 Review and fix MeTTa annotations from the SQLite store.
 
-Run with an optional number argument: `/review 20` (default: 10).
+Run with optional arguments: `/review 20` (default: 10), `/review 50 offset 100`.
+
+Parse `$ARGUMENTS`: extract a number for `limit` (default 10) and if the word `offset` appears, take the number after it as `offset` (default 0).
 
 ## 1. Revalidate
 
-Call `mcp__metta-nl-corpus__revalidate_annotations` with `limit` set to `$ARGUMENTS` (default 10). This picks annotations from the DB and checks them against the current inference engine.
+Call `mcp__metta-nl-corpus__revalidate_annotations` with `limit` and `offset` parsed from `$ARGUMENTS`. This picks annotations from the DB and checks them against the current inference engine.
 
 ## 2. Triage results
 

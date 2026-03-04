@@ -827,6 +827,7 @@ def revalidate_annotations(
     save: bool = False,
     timeout: int = 5,
     limit: int = 10,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Re-validate stored annotations against the current inference engine.
 
@@ -838,6 +839,7 @@ def revalidate_annotations(
         save: Whether to persist updated is_valid flags to the DB. Default False (dry run).
         timeout: Per-row validation timeout in seconds (default 5).
         limit: Max rows to process (0 = all, default 10).
+        offset: Number of rows to skip before processing (default 0).
 
     Returns a summary with per-row results and aggregate counts.
     """
@@ -857,9 +859,13 @@ def revalidate_annotations(
     if label:
         query += " WHERE label = ?"
         params.append(label)
+    query += " ORDER BY annotation_id"
     if limit > 0:
         query += " LIMIT ?"
         params.append(str(limit))
+    if offset > 0:
+        query += " OFFSET ?"
+        params.append(str(offset))
 
     rows = [
         store._row_to_dict(dict(r), source="annotations")
