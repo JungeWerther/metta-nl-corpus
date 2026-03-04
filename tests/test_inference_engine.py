@@ -124,31 +124,31 @@ def _assert_contradiction_tv(result, expected_nonzero=True):
 def test_numeric_contradiction_gt_lt():
     """(> X 60) ∧ (< X 50) → ⊥ because 50 ≤ 60."""
     result = _run_with_inference(
-        "!(add-proposition-tv (> price 60) (STV 0.9 0.9))",
-        "!(add-proposition-tv (< price 50) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 50))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 def test_numeric_no_contradiction_overlapping():
-    """(> X 60) ∧ (< X 70) — TV is (STV 0.0 0.0) because ranges overlap."""
+    """(> X 60) ∧ (< X 70) — no contradiction because ranges overlap."""
     result = _run_with_inference(
-        "!(add-proposition-tv (> price 60) (STV 0.9 0.9))",
-        "!(add-proposition-tv (< price 70) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 70))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=False)
+    assert result and len(result[-1]) == 0
 
 
 def test_numeric_contradiction_equal_bounds():
     """(> X 60) ∧ (< X 60) → ⊥ because 60 ≤ 60."""
     result = _run_with_inference(
-        "!(add-proposition-tv (> price 60) (STV 0.9 0.9))",
-        "!(add-proposition-tv (< price 60) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (> price 60))",
+        "!(add-atom &a (< price 60))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 def test_prediction_contradiction_with_tv():
@@ -241,51 +241,51 @@ def test_find_evidence_for_tv_no_numeric_contradiction():
 def test_gt_lte_contradiction():
     """(> X 6) ∧ (<= X 5) → ⊥ because 5 ≤ 6."""
     result = _run_with_inference(
-        "!(add-proposition-tv (> price 6) (STV 0.9 0.9))",
-        "!(add-proposition-tv (<= price 5) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (> price 6))",
+        "!(add-atom &a (<= price 5))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 def test_gte_lt_contradiction():
     """(>= X 6) ∧ (< X 5) → ⊥ because 5 ≤ 6."""
     result = _run_with_inference(
-        "!(add-proposition-tv (>= price 6) (STV 0.9 0.9))",
-        "!(add-proposition-tv (< price 5) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (< price 5))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 def test_gte_lte_contradiction():
     """(>= X 6) ∧ (<= X 4) → ⊥ because 4 < 6."""
     result = _run_with_inference(
-        "!(add-proposition-tv (>= price 6) (STV 0.9 0.9))",
-        "!(add-proposition-tv (<= price 4) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (<= price 4))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 def test_gte_lte_no_contradiction_at_equal():
     """(>= X 6) ∧ (<= X 6) — NOT contradiction, X=6 works."""
     result = _run_with_inference(
-        "!(add-proposition-tv (>= price 6) (STV 0.9 0.9))",
-        "!(add-proposition-tv (<= price 6) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (>= price 6))",
+        "!(add-atom &a (<= price 6))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=False)
+    assert result and len(result[-1]) == 0
 
 
 def test_lte_gt_cross_bound_contradiction():
     """(<= X 5) ∧ (> X 6) → ⊥ because 5 ≤ 6."""
     result = _run_with_inference(
-        "!(add-proposition-tv (<= price 5) (STV 0.9 0.9))",
-        "!(add-proposition-tv (> price 6) (STV 0.9 0.9))",
-        "!(find-evidence-for-tv ⊥)",
+        "!(add-atom &a (<= price 5))",
+        "!(add-atom &a (> price 6))",
+        "!(find-evidence-for ⊥)",
     )
-    _assert_contradiction_tv(result, expected_nonzero=True)
+    assert result and len(result[-1]) > 0
 
 
 # === Complement TV Tests ===
