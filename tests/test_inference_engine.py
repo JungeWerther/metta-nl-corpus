@@ -315,3 +315,73 @@ def test_complement_tv_gt_to_lte():
     tv_str = str(result[-1][0])
     assert "0.2" in tv_str or "0.19" in tv_str
     assert "0.6" in tv_str
+
+
+# === Disjunction Tests ===
+
+
+def test_disjunction_introduction_via_transitivity():
+    """All swans are white, this is a swan → (∨ (white this-swan) (black this-swan))."""
+    result = _run_with_inference(
+        "!(add-proposition (white swan))",
+        "!(add-proposition (swan this-swan))",
+        "!(find-evidence-for (∨ (white this-swan) (black this-swan)))",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_disjunction_right_branch_via_transitivity():
+    """All swans are black, this is a swan → (∨ (white this-swan) (black this-swan))."""
+    result = _run_with_inference(
+        "!(add-proposition (black swan))",
+        "!(add-proposition (swan this-swan))",
+        "!(find-evidence-for (∨ (white this-swan) (black this-swan)))",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_disjunction_neither_derivable():
+    """No facts about white or black → disjunction not provable."""
+    result = _run_with_inference(
+        "!(add-proposition (swan this-swan))",
+        "!(find-evidence-for (∨ (white this-swan) (black this-swan)))",
+    )
+    assert result and len(result[-1]) == 0
+
+
+def test_disjunction_tv_propagates_through_transitivity():
+    """TV propagates through transitive chain into disjunction."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (white swan) (STV 0.8 0.9))",
+        "!(add-proposition-tv (swan this-swan) (STV 1.0 0.99))",
+        "!(find-evidence-for-tv (∨ (white this-swan) (black this-swan)))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "≞" in tv_str
+    # TV comes from the transitive chain: hypothesis (swan this-swan) has c=0.99
+    assert "0.99" in tv_str
+
+
+def test_disjunction_elimination_contradiction():
+    """(∨ (> price 70) (> price 80)) with (< price 60) → ⊥ via case analysis.
+
+    Chain: (< price 60) → (is-not (> price 80)) via negation bridge
+           → (> price 70) via ∨ implication → contradiction with (< price 60).
+    """
+    result = _run_with_inference(
+        "!(add-proposition (∨ (> price 70) (> price 80)))",
+        "!(add-atom &a (< price 60))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_disjunction_elimination_no_contradiction():
+    """(∨ (> price 70) (> price 80)) with (< price 75) → NOT ⊥ (left branch overlaps)."""
+    result = _run_with_inference(
+        "!(add-proposition (∨ (> price 70) (> price 80)))",
+        "!(add-atom &a (< price 75))",
+        "!(find-evidence-for ⊥)",
+    )
+    assert result and len(result[-1]) == 0
