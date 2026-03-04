@@ -17,6 +17,37 @@ from structlog import get_logger
 
 logger = get_logger(__name__)
 
+# MeTTa symbols that clash with Prolog operators.
+# Mapped to Prolog-safe alphanumeric names for serialization,
+# then restored in output via deserialization.
+_METTA_TO_PROLOG: Sequence[tuple[str, str]] = (
+    ("=>", "__metta_implies__"),
+    (">=", "__metta_gte__"),
+    ("<=", "__metta_lte__"),
+    (">", "__metta_gt__"),
+    ("<", "__metta_lt__"),
+    ("≞", "__metta_approx__"),
+    ("⊥", "__metta_bottom__"),
+)
+
+_PROLOG_TO_METTA: Sequence[tuple[str, str]] = tuple(
+    (prolog, metta) for metta, prolog in _METTA_TO_PROLOG
+)
+
+
+def _serialize_for_petta(code: str) -> str:
+    """Replace MeTTa operator symbols with Prolog-safe names."""
+    for metta_sym, prolog_sym in _METTA_TO_PROLOG:
+        code = code.replace(metta_sym, prolog_sym)
+    return code
+
+
+def _deserialize_from_petta(text: str) -> str:
+    """Restore Prolog-safe names back to MeTTa operator symbols."""
+    for prolog_sym, metta_sym in _PROLOG_TO_METTA:
+        text = text.replace(prolog_sym, metta_sym)
+    return text
+
 
 class MeTTaBackend(StrEnum):
     HYPERON = "hyperon"
@@ -57,7 +88,7 @@ class PeTTaRunner:
 
     def run(self, code: str) -> Sequence[Sequence[str]]:
         self._buffer.append(code)
-        full_code: str = "\n".join(self._buffer)
+        full_code: str = _serialize_for_petta("\n".join(self._buffer))
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".metta", delete=False
@@ -88,10 +119,16 @@ class PeTTaRunner:
 
 
 def _parse_petta_output(stdout: str) -> Sequence[Sequence[str]]:
-    """Parse PeTTa stdout into list-of-lists using hyperon's parse_all."""
+    """Parse PeTTa stdout into list-of-lists using hyperon's parse_all.
+
+    Deserializes Prolog-safe symbol names back to MeTTa operators first.
+    """
     from metta_nl_corpus.lib.helpers import parse_all
 
-    lines: list[str] = [ln.strip() for ln in stdout.strip().splitlines() if ln.strip()]
+    deserialized: str = _deserialize_from_petta(stdout)
+    lines: list[str] = [
+        ln.strip() for ln in deserialized.strip().splitlines() if ln.strip()
+    ]
     results: list[Sequence[str]] = []
     for line in lines:
         if line.startswith("[") and line.endswith("]"):
