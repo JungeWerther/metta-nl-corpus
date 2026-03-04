@@ -315,3 +315,56 @@ def test_complement_tv_gt_to_lte():
     tv_str = str(result[-1][0])
     assert "0.2" in tv_str or "0.19" in tv_str
     assert "0.6" in tv_str
+
+
+# === Disjunction Tests ===
+
+
+def test_disjunction_left_holds():
+    """(or A B) succeeds when A holds."""
+    result = _run_with_inference(
+        "!(add-proposition (white swan))",
+        "!(find-evidence-for (or (white swan) (black swan)))",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_disjunction_right_holds():
+    """(or A B) succeeds when B holds."""
+    result = _run_with_inference(
+        "!(add-proposition (black swan))",
+        "!(find-evidence-for (or (white swan) (black swan)))",
+    )
+    assert result and len(result[-1]) > 0
+
+
+def test_disjunction_neither_holds():
+    """(or A B) returns empty when neither holds."""
+    result = _run_with_inference(
+        "!(find-evidence-for (or (white swan) (black swan)))",
+    )
+    assert result and len(result[-1]) == 0
+
+
+def test_disjunction_tv_left():
+    """(or A B) with TV returns TV of whichever branch holds."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (white swan) (STV 0.8 0.9))",
+        "!(find-evidence-for-tv (or (white swan) (black swan)))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "0.8" in tv_str
+    assert "0.9" in tv_str
+
+
+def test_disjunction_tv_right():
+    """(or A B) with TV returns TV of whichever branch holds."""
+    result = _run_with_inference(
+        "!(add-proposition-tv (black swan) (STV 0.6 0.7))",
+        "!(find-evidence-for-tv (or (white swan) (black swan)))",
+    )
+    assert result and len(result[-1]) > 0
+    tv_str = str(result[-1][0])
+    assert "0.6" in tv_str
+    assert "0.7" in tv_str
