@@ -102,7 +102,9 @@
 ;; get-tv: retrieve the truth value for a proposition
 (= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
 
-;; get-tv-or-default: returns TV if attached, otherwise (STV 1.0 1.0)
+;; get-tv-or-default: returns TV if attached, (STV 1.0 1.0) if not
+;; The default represents "no opinion" — it does not dilute or inflate
+;; because 1.0 is the identity element for multiplication in combine-tv.
 (= (get-tv-or-default $expr)
    (case (get-tv $expr)
      (((STV $s $c) (STV $s $c))
@@ -121,11 +123,12 @@
      (let $tv (get-tv-or-default $to-prove)
        (≞ $ev $tv))))
 
-;; Recursive: one transitive step, propagate hypothesis TV
+;; Recursive: one transitive step, combine hypothesis TV with rule TV
 (= (find-evidence-for-tv $to-prove (S $k))
    (let $hypothesis (match &a (=> $x $to-prove) $x)
      (let (≞ $ev $tv-hyp) (find-evidence-for-tv $hypothesis $k)
-       (≞ (=> $ev $to-prove) $tv-hyp))))
+       (let $tv-rule (get-tv-or-default (=> $hypothesis $to-prove))
+         (≞ (=> $ev $to-prove) (combine-tv $tv-hyp $tv-rule))))))
 
 ;; Conjunction: combine TVs of both branches
 (= (find-evidence-for-tv (, $x $y) $d)
@@ -139,7 +142,15 @@
 
 ;; === Numeric contradiction ===
 ;; (> X A) ∧ (< X B) where B ≤ A → ⊥
+
+;; Boolean: computational guard inside proof search
 (= (find-evidence-for ⊥ $d)
    (let (> $x $a) (match &a (> $x $a) (> $x $a))
      (let (< $x $b) (match &a (< $x $b) (< $x $b))
        (if (<= $b $a) ⊥ (empty)))))
+
+;; TV-aware: implication in the space + computed TV on the rule
+!(add-atom &a (=> (, (> $x $a) (< $x $b)) ⊥))
+
+(= (get-tv (=> (, (> $x $a) (< $x $b)) ⊥))
+   (if (<= $b $a) (STV 1.0 1.0) (STV 0.0 0.0)))
