@@ -714,6 +714,93 @@ def update_annotation(
 
 
 @mcp.tool()
+def clean_annotation(
+    annotation_id: str,
+    metta_premise: str | None = None,
+    metta_hypothesis: str | None = None,
+    comment: str | None = None,
+) -> dict[str, Any]:
+    """Fix and re-validate a single annotation.
+
+    Allows patching either metta_premise, metta_hypothesis, or both.
+    Unchanged fields keep their current value. Re-validates after patching
+    and records modification_date and modification_comment.
+
+    Args:
+        annotation_id: The UUID of the annotation to clean.
+        metta_premise: New MeTTa premise (or None to keep existing).
+        metta_hypothesis: New MeTTa hypothesis (or None to keep existing).
+        comment: Why the change was made.
+
+    Returns the updated row with validation result.
+    """
+    from datetime import datetime, timezone
+
+    from metta_nl_corpus.services.defs.transformation.assets import (
+        validate_expressions_by_label,
+    )
+
+    existing = store.get_annotation(annotation_id)
+    if existing is None:
+        return {"error": f"Annotation '{annotation_id}' not found."}
+
+    premise = (
+        metta_premise.strip() if metta_premise else existing.get("metta_premise")
+    ) or ""
+    hypothesis = (
+        metta_hypothesis.strip()
+        if metta_hypothesis
+        else existing.get("metta_hypothesis")
+    ) or ""
+
+    if not premise and not hypothesis:
+        return {"error": "Both metta_premise and metta_hypothesis are empty."}
+
+    label_str = existing.get("label", "")
+    if label_str == "contradication":
+        label_str = "contradiction"
+    try:
+        label = RelationKind(label_str)
+    except ValueError:
+        return {"error": f"Unknown label '{label_str}' on annotation."}
+
+    is_valid = validate_expressions_by_label(
+        label=label,
+        metta_premise=premise,
+        metta_hypothesis=hypothesis,
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    store.update_annotation(
+        annotation_id,
+        {
+            "metta_premise": premise,
+            "metta_hypothesis": hypothesis,
+            "is_valid": is_valid,
+            "modification_date": now,
+            "modification_comment": comment,
+        },
+    )
+
+    logger.info(
+        "Cleaned annotation",
+        annotation_id=annotation_id,
+        is_valid=is_valid,
+        comment=comment,
+    )
+
+    updated = store.get_annotation(annotation_id)
+    if updated and isinstance(updated.get("system_prompt"), str):
+        updated["system_prompt"] = updated["system_prompt"][:100] + "..."
+
+    return {
+        "success": True,
+        "is_valid": is_valid,
+        "annotation": updated,
+    }
+
+
+@mcp.tool()
 def export_annotations_parquet(
     table: str = "annotations",
 ) -> dict[str, Any]:

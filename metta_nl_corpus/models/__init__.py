@@ -36,6 +36,8 @@ class Annotation(TrainingBase):
     input_tokens: int | None = Field(default=None, nullable=True)
     output_tokens: int | None = Field(default=None, nullable=True)
     fix_reason: str | None = Field(default=None, nullable=True)
+    modification_date: str | None = Field(default=None, nullable=True)
+    modification_comment: str | None = Field(default=None, nullable=True)
     version: str = Field(default=DATA_VERSION)
 
     class Config:

@@ -93,6 +93,21 @@ class AnnotationStore:
         cols_v = ", ".join(f"{name} {typ}" for name, typ in _VALIDATIONS_COLUMNS)
         conn.execute(f"CREATE TABLE IF NOT EXISTS validations ({cols_v})")
         conn.commit()
+        self._migrate_columns(conn)
+
+    def _migrate_columns(self, conn: sqlite3.Connection) -> None:
+        """Add any missing columns to existing tables."""
+        cur = conn.execute("PRAGMA table_info(annotations)")
+        existing = {row[1] for row in cur.fetchall()}
+        for col_name, col_def in _ANNOTATIONS_COLUMNS:
+            if col_name not in existing:
+                # Strip NOT NULL for migration safety — existing rows will be NULL.
+                safe_def = col_def.replace(" NOT NULL", "")
+                conn.execute(
+                    f"ALTER TABLE annotations ADD COLUMN {col_name} {safe_def}"
+                )
+                logger.info("Migrated column", table="annotations", column=col_name)
+        conn.commit()
 
     # -- annotations -----------------------------------------------------------
 
