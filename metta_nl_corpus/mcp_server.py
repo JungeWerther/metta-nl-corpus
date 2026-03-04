@@ -23,6 +23,7 @@ from metta_nl_corpus.constants import (
     VALIDATIONS_PATH,
 )
 from metta_nl_corpus.lib.helpers import parse_all
+from metta_nl_corpus.lib.runner import create_runner
 from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import RelationKind
 
@@ -206,9 +207,7 @@ def execute_metta(
     Returns dict with ``results`` (list of result strings) or ``error``.
     """
     try:
-        from hyperon import MeTTa
-
-        runner = MeTTa()
+        runner = create_runner()
         raw_results = runner.run(metta_code)
         # raw_results is a list of lists (one per !-expression)
         results = []
