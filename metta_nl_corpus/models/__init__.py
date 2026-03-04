@@ -5,7 +5,7 @@ from pandera.polars import DataFrameModel, Field
 from pandera.typing.common import UInt32
 from pandera.typing.polars import DataFrame
 
-DATA_VERSION = "0.0.1"
+DATA_VERSION = "0.0.5"
 
 
 class TrainingBase(DataFrameModel):
@@ -66,7 +66,7 @@ class RelationKind(StrEnum):
     ENTAILMENT = "entailment"
     NEUTRAL = "neutral"
     CONTRADICTION = "contradiction"
-    ONTOLOGY = "ontology"
+    EXPRESSION = "expression"
     NO_LABEL = "no_label"
 
 

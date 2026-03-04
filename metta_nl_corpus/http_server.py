@@ -61,7 +61,7 @@ class BatchAnnotateRequest(BaseModel):
 
 
 async def _annotate_title(title: str, model: str) -> AnnotateResponse:
-    """Run the MeTTa agent on a single title (ontology label)."""
+    """Run the MeTTa agent on a single title (expression label)."""
     from metta_nl_corpus.services.defs.transformation.assets import (
         ExpressionDeps,
         _create_metta_agent,
@@ -73,13 +73,13 @@ async def _annotate_title(title: str, model: str) -> AnnotateResponse:
     deps = ExpressionDeps(
         premise=title,
         hypothesis="",
-        label=RelationKind.ONTOLOGY,
+        label=RelationKind.EXPRESSION,
     )
     last_generation_attempt.set(None)
 
     try:
         result = await agent.run(
-            f"Generate MeTTa ontology expressions for: {title}",
+            f"Generate MeTTa expressions for: {title}",
             deps=deps,
         )
     except Exception as exc:
@@ -108,14 +108,14 @@ async def _annotate_title(title: str, model: str) -> AnnotateResponse:
                 "index": 0,
                 "premise": title,
                 "hypothesis": None,
-                "label": RelationKind.ONTOLOGY.value,
+                "label": RelationKind.EXPRESSION.value,
                 "metta_premise": metta_expressions.strip()
                 if metta_expressions
                 else None,
                 "metta_hypothesis": None,
                 "generation_model": model,
                 "system_prompt": system_prompt,
-                "version": "0.0.3",
+                "version": "0.0.4",
                 "is_valid": is_valid,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,

@@ -39,7 +39,7 @@ mcp = FastMCP(
         "MeTTa-NL-Corpus pipeline server. "
         "Provides tools for parsing MeTTa expressions, validating logical relations, "
         "generating NL-to-MeTTa annotations via an internal AI agent, "
-        "running batch pipelines, querying stored results, and extracting ontologies "
+        "running batch pipelines, querying stored results, and extracting expressions "
         "from natural language sentences via add_expressions."
     ),
 )
@@ -114,9 +114,9 @@ def add_expressions(
     metta_expressions: str,
     model: str = "claude",
 ) -> dict[str, Any]:
-    """Append validated MeTTa ontology expressions to the annotations cache.
+    """Append validated MeTTa expressions to the annotations cache.
 
-    Parses the expressions, creates an annotation row with label="ontology",
+    Parses the expressions, creates an annotation row with label="expression",
     and appends it to the annotations parquet file.
 
     Args:
@@ -144,19 +144,19 @@ def add_expressions(
                 "index": 0,
                 "premise": sentence,
                 "hypothesis": None,
-                "label": RelationKind.ONTOLOGY.value,
+                "label": RelationKind.EXPRESSION.value,
                 "metta_premise": metta_expressions.strip(),
                 "metta_hypothesis": None,
                 "generation_model": model,
                 "system_prompt": system_prompt,
-                "version": "0.0.3",
+                "version": "0.0.4",
                 "is_valid": True,
                 "input_tokens": None,
                 "output_tokens": None,
             }
         )
         logger.info(
-            "Stored ontology annotation",
+            "Stored expression annotation",
             annotation_id=annotation_id,
         )
     except Exception as e:
@@ -201,7 +201,7 @@ def execute_metta(
         metta_code: MeTTa source code to execute.
         premise: Optional natural-language premise. When provided, the code
             and results are stored to the annotations parquet as a
-            human-annotated ontology entry (version v0.0.4-human).
+            human-annotated expression entry (version 0.0.4).
 
     Returns dict with ``results`` (list of result strings) or ``error``.
     """
@@ -230,12 +230,12 @@ def execute_metta(
                     "index": 0,
                     "premise": premise,
                     "hypothesis": None,
-                    "label": RelationKind.ONTOLOGY.value,
+                    "label": RelationKind.EXPRESSION.value,
                     "metta_premise": metta_code.strip(),
                     "metta_hypothesis": None,
                     "generation_model": "claude-opus-4-6",
                     "system_prompt": system_prompt,
-                    "version": "v0.0.4-human",
+                    "version": "0.0.4",
                     "is_valid": True,
                     "input_tokens": None,
                     "output_tokens": None,
@@ -314,7 +314,7 @@ def validate_relation(
                 "metta_hypothesis": metta_hypothesis.strip(),
                 "generation_model": model,
                 "system_prompt": system_prompt,
-                "version": "0.0.3",
+                "version": "0.0.4",
                 "is_valid": is_valid,
                 "input_tokens": None,
                 "output_tokens": None,
@@ -415,7 +415,7 @@ async def ask_metta_agent(
                 "metta_hypothesis": output.metta_hypothesis,
                 "generation_model": model,
                 "system_prompt": system_prompt,
-                "version": "0.0.3",
+                "version": "0.0.4",
                 "is_valid": is_valid,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -684,18 +684,12 @@ def update_annotation(
         metta_hypothesis=metta_hypothesis.strip(),
     )
 
-    old_version = existing.get("version") or "0.0.0"
-    human_version = (
-        old_version if old_version.endswith("-human") else f"{old_version}-human"
-    )
-
     store.update_annotation(
         annotation_id,
         {
             "metta_premise": metta_premise.strip(),
             "metta_hypothesis": metta_hypothesis.strip(),
             "is_valid": is_valid,
-            "version": human_version,
             "fix_reason": fix_reason,
         },
     )
@@ -704,7 +698,6 @@ def update_annotation(
         "Updated annotation",
         annotation_id=annotation_id,
         is_valid=is_valid,
-        version=human_version,
         fix_reason=fix_reason,
     )
 
