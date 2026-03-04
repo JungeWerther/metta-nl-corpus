@@ -826,7 +826,7 @@ def revalidate_annotations(
     label: str | None = None,
     save: bool = False,
     timeout: int = 5,
-    limit: int = 0,
+    limit: int = 10,
 ) -> dict[str, Any]:
     """Re-validate stored annotations against the current inference engine.
 
@@ -837,7 +837,7 @@ def revalidate_annotations(
         label: Optional label filter (e.g. "entailment", "contradiction", "neutral").
         save: Whether to persist updated is_valid flags to the DB. Default False (dry run).
         timeout: Per-row validation timeout in seconds (default 5).
-        limit: Max rows to process (0 = all).
+        limit: Max rows to process (0 = all, default 10).
 
     Returns a summary with per-row results and aggregate counts.
     """
