@@ -145,6 +145,41 @@ class AnnotationStore:
         )
         conn.commit()
 
+    def upsert_annotation(self, row: dict[str, Any]) -> str:
+        """INSERT or UPDATE a single annotation row. Returns the annotation_id.
+
+        If annotation_id exists, updates only the provided columns.
+        Otherwise inserts a new row.
+        """
+        aid = row.get("annotation_id", "")
+        if aid and self.get_annotation(str(aid)) is not None:
+            updates = {k: v for k, v in row.items() if k != "annotation_id"}
+            self.update_annotation(str(aid), updates)
+            return str(aid)
+        return self.insert_annotation(row)
+
+    def deduplicate(self) -> int:
+        """Remove duplicate annotations, keeping the most recently modified row per premise+hypothesis pair.
+
+        Returns the number of rows deleted.
+        """
+        conn = self._get_conn()
+        before = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0]
+        conn.execute("""
+            DELETE FROM annotations
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid) FROM annotations
+                GROUP BY premise, hypothesis
+            )
+        """)
+        conn.commit()
+        after = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0]
+        deleted = before - after
+        logger.info(
+            "Deduplicated annotations", before=before, after=after, deleted=deleted
+        )
+        return deleted
+
     def get_annotation(self, annotation_id: str) -> dict[str, Any] | None:
         """Fetch a single annotation by id, or None."""
         conn = self._get_conn()

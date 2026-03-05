@@ -192,6 +192,7 @@ def parse_metta(metta_code: str) -> dict[str, Any]:
 def execute_metta(
     metta_code: str,
     premise: str | None = None,
+    store_result: bool = False,
 ) -> dict[str, Any]:
     """Execute MeTTa code in a fresh runner and return the results.
 
@@ -200,9 +201,9 @@ def execute_metta(
 
     Args:
         metta_code: MeTTa source code to execute.
-        premise: Optional natural-language premise. When provided, the code
-            and results are stored to the annotations parquet as a
-            human-annotated expression entry (version 0.0.4).
+        premise: Optional natural-language premise for the annotation.
+        store_result: Whether to store the result as an annotation (default: False).
+            Requires premise to be set.
 
     Returns dict with ``results`` (list of result strings) or ``error``.
     """
@@ -218,7 +219,7 @@ def execute_metta(
 
     response: dict[str, Any] = {"success": True, "results": results}
 
-    if premise is not None:
+    if store_result and premise is not None:
         annotation_id = str(uuid.uuid4())
         system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
 
@@ -261,10 +262,12 @@ def validate_relation(
     premise: str | None = None,
     hypothesis: str | None = None,
     model: str = "claude",
+    store_result: bool = False,
 ) -> dict[str, Any]:
     """Check whether MeTTa expressions satisfy a logical relation.
 
-    Automatically stores the validated result to the annotations cache.
+    By default, only validates without storing. Set store_result=True to
+    persist the result as a new annotation.
 
     Args:
         metta_premise: MeTTa s-expression(s) for the premise.
@@ -273,8 +276,9 @@ def validate_relation(
         premise: Original natural-language premise (stored with the annotation).
         hypothesis: Original natural-language hypothesis (stored with the annotation).
         model: Which model generated the expressions (default: "claude").
+        store_result: Whether to store the result as a new annotation (default: False).
 
-    Returns dict with ``valid`` (bool), ``message``, and ``annotation_id``.
+    Returns dict with ``valid`` (bool), ``message``, and optionally ``annotation_id``.
     """
     from metta_nl_corpus.services.defs.transformation.assets import (
         validate_expressions_by_label,
@@ -297,45 +301,44 @@ def validate_relation(
     except Exception as e:
         return {"valid": False, "message": f"Validation failed: {e}"}
 
-    # Store the validated result
-    annotation_id = str(uuid.uuid4())
-    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
-
-    try:
-        store.insert_annotation(
-            {
-                "annotation_id": annotation_id,
-                "index": 0,
-                "premise": premise,
-                "hypothesis": hypothesis,
-                "label": label.value,
-                "metta_premise": metta_premise.strip(),
-                "metta_hypothesis": metta_hypothesis.strip(),
-                "generation_model": model,
-                "system_prompt": system_prompt,
-                "version": "0.0.4",
-                "is_valid": is_valid,
-                "input_tokens": None,
-                "output_tokens": None,
-            }
-        )
-        logger.info(
-            "Stored validated annotation",
-            annotation_id=annotation_id,
-            is_valid=is_valid,
-        )
-    except Exception as e:
-        logger.error("Failed to store annotation", error=str(e))
-        return {
-            "valid": is_valid,
-            "message": f"Expressions {'match' if is_valid else 'do NOT match'} expected relation {label.value}. WARNING: failed to store: {e}",
-        }
-
-    return {
+    result: dict[str, Any] = {
         "valid": is_valid,
         "message": f"Expressions {'match' if is_valid else 'do NOT match'} expected relation {label.value}.",
-        "annotation_id": annotation_id,
     }
+
+    if store_result:
+        annotation_id = str(uuid.uuid4())
+        system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
+
+        try:
+            store.insert_annotation(
+                {
+                    "annotation_id": annotation_id,
+                    "index": 0,
+                    "premise": premise,
+                    "hypothesis": hypothesis,
+                    "label": label.value,
+                    "metta_premise": metta_premise.strip(),
+                    "metta_hypothesis": metta_hypothesis.strip(),
+                    "generation_model": model,
+                    "system_prompt": system_prompt,
+                    "version": "0.0.4",
+                    "is_valid": is_valid,
+                    "input_tokens": None,
+                    "output_tokens": None,
+                }
+            )
+            logger.info(
+                "Stored validated annotation",
+                annotation_id=annotation_id,
+                is_valid=is_valid,
+            )
+            result["annotation_id"] = annotation_id
+        except Exception as e:
+            logger.error("Failed to store annotation", error=str(e))
+            result["message"] += f" WARNING: failed to store: {e}"
+
+    return result
 
 
 @mcp.tool()
@@ -693,11 +696,13 @@ def clean_annotation(
     metta_hypothesis: str | None = None,
     comment: str | None = None,
 ) -> dict[str, Any]:
-    """Fix and re-validate a single annotation.
+    """Fix and re-validate a single annotation (upsert).
 
     Allows patching either metta_premise, metta_hypothesis, or both.
     Unchanged fields keep their current value. Re-validates after patching
     and records modification_date and modification_comment.
+
+    If the annotation_id does not exist, inserts a new row.
 
     Args:
         annotation_id: The UUID of the annotation to clean.
@@ -714,24 +719,28 @@ def clean_annotation(
     )
 
     existing = store.get_annotation(annotation_id)
-    if existing is None:
-        return {"error": f"Annotation '{annotation_id}' not found."}
 
     premise = (
-        metta_premise.strip() if metta_premise else existing.get("metta_premise")
+        metta_premise.strip()
+        if metta_premise
+        else (existing.get("metta_premise") if existing else "")
     ) or ""
     hypothesis = (
         metta_hypothesis.strip()
         if metta_hypothesis
-        else existing.get("metta_hypothesis")
+        else (existing.get("metta_hypothesis") if existing else "")
     ) or ""
 
     if not premise and not hypothesis:
         return {"error": "Both metta_premise and metta_hypothesis are empty."}
 
-    label_str = existing.get("label", "")
+    label_str = existing.get("label", "") if existing else ""
     if label_str == "contradication":
         label_str = "contradiction"
+    if not label_str:
+        return {
+            "error": "Cannot determine label — provide an existing annotation_id or use add_expressions."
+        }
     try:
         label = RelationKind(label_str)
     except ValueError:
@@ -744,16 +753,29 @@ def clean_annotation(
     )
 
     now = datetime.now(timezone.utc).isoformat()
-    store.update_annotation(
-        annotation_id,
-        {
-            "metta_premise": premise,
-            "metta_hypothesis": hypothesis,
-            "is_valid": is_valid,
-            "modification_date": now,
-            "modification_comment": comment,
-        },
-    )
+    row = {
+        "annotation_id": annotation_id,
+        "metta_premise": premise,
+        "metta_hypothesis": hypothesis,
+        "is_valid": is_valid,
+        "modification_date": now,
+        "modification_comment": comment,
+    }
+    # Carry forward existing fields for upsert when inserting new
+    if existing:
+        for key in (
+            "index",
+            "premise",
+            "hypothesis",
+            "label",
+            "generation_model",
+            "system_prompt",
+            "version",
+        ):
+            if key not in row:
+                row[key] = existing.get(key)
+
+    store.upsert_annotation(row)
 
     logger.info(
         "Cleaned annotation",
