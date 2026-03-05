@@ -113,7 +113,7 @@ def update_annotation_guideline(content: str) -> dict[str, Any]:
 def add_expressions(
     sentence: str,
     metta_expressions: str,
-    model: str = "claude",
+    model: str = "claude-opus-4-6",
 ) -> dict[str, Any]:
     """Append validated MeTTa expressions to the annotations cache.
 
@@ -261,7 +261,7 @@ def validate_relation(
     relation: str,
     premise: str | None = None,
     hypothesis: str | None = None,
-    model: str = "claude",
+    model: str = "claude-opus-4-6",
     store_result: bool = False,
 ) -> dict[str, Any]:
     """Check whether MeTTa expressions satisfy a logical relation.
