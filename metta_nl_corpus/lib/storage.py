@@ -138,6 +138,13 @@ class AnnotationStore:
         mapped = {_PL_TO_SQL.get(k, k): v for k, v in updates.items()}
         if "is_valid" in mapped and isinstance(mapped["is_valid"], bool):
             mapped["is_valid"] = int(mapped["is_valid"])
+        # Only update columns that exist in the table.
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(annotations)").fetchall()
+        }
+        mapped = {k: v for k, v in mapped.items() if k in existing_cols}
+        if not mapped:
+            return
         set_clause = ", ".join(f"{k} = ?" for k in mapped)
         conn.execute(
             f"UPDATE annotations SET {set_clause} WHERE annotation_id = ?",
