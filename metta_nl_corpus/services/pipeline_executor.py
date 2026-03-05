@@ -5,7 +5,6 @@ import os
 from enum import StrEnum
 from typing import NamedTuple
 
-# Count annotations
 import polars as pl
 from dagster import (
     DagsterInstance,
@@ -13,9 +12,13 @@ from dagster import (
 )
 from structlog import get_logger
 
-from metta_nl_corpus.constants import ANNOTATIONS_PATH
+from metta_nl_corpus.constants import (
+    ANNOTATIONS_DB_PATH,
+    ANNOTATIONS_PATH,
+    CLEANED_ANNOTATIONS_PATH,
+)
 from metta_nl_corpus.lib.pipeline_config import PipelineRunConfig
-from metta_nl_corpus.constants import CLEANED_ANNOTATIONS_PATH
+from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.services.defs.cleaning.assets import (
     bronze_dataset,
     cleaned_annotations,
@@ -110,8 +113,9 @@ class PipelineExecutor:
             if result.success:
                 annotations_count: int
                 try:
-                    df = pl.read_parquet(ANNOTATIONS_PATH)
-                    annotations_count = len(df)
+                    annotations_count = AnnotationStore(ANNOTATIONS_DB_PATH).query(
+                        limit=1
+                    )["total"]
                 except Exception:
                     annotations_count = 0
 
