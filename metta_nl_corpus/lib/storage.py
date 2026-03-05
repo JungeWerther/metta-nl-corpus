@@ -160,7 +160,7 @@ class AnnotationStore:
         self,
         table: str = "annotations",
         filter_column: str | None = None,
-        filter_value: str | None = None,
+        filter_value: str | list[str] | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
         """SELECT with optional filter. Returns {total, returned, columns, rows}."""
@@ -174,24 +174,15 @@ class AnnotationStore:
             _PL_TO_SQL.get(filter_column, filter_column) if filter_column else None
         )
 
+        # Build WHERE clause depending on scalar vs list filter_value.
+        where, params = self._build_where(sql_filter_col, filter_value)
+
         # Total count
-        if sql_filter_col and filter_value:
-            cur = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE {sql_filter_col} = ?",
-                (filter_value,),
-            )
-        else:
-            cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
+        cur = conn.execute(f"SELECT COUNT(*) FROM {table}{where}", params)
         total = cur.fetchone()[0]
 
         # Fetch rows
-        if sql_filter_col and filter_value:
-            cur = conn.execute(
-                f"SELECT * FROM {table} WHERE {sql_filter_col} = ? LIMIT ?",
-                (filter_value, limit),
-            )
-        else:
-            cur = conn.execute(f"SELECT * FROM {table} LIMIT ?", (limit,))
+        cur = conn.execute(f"SELECT * FROM {table}{where} LIMIT ?", (*params, limit))
 
         rows = [self._row_to_dict(dict(r), source=table) for r in cur.fetchall()]
         col_names = (
@@ -267,6 +258,24 @@ class AnnotationStore:
         return count
 
     # -- helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _build_where(
+        column: str | None, value: str | list[str] | None
+    ) -> tuple[str, tuple[str, ...]]:
+        """Return a (WHERE clause, params) tuple.
+
+        Accepts a single string or a list of strings. Strings are never
+        iterated character-by-character — only ``list`` triggers IN().
+        """
+        if not column or value is None:
+            return "", ()
+        if isinstance(value, list):
+            if not value:
+                return " WHERE 1=0", ()
+            placeholders = ", ".join("?" for _ in value)
+            return f" WHERE {column} IN ({placeholders})", tuple(value)
+        return f" WHERE {column} = ?", (value,)
 
     @staticmethod
     def _row_to_dict(

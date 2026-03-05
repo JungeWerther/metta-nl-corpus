@@ -548,7 +548,7 @@ async def run_pipeline(
 def query_annotations(
     file: str = "annotations",
     filter_column: str | None = None,
-    filter_value: str | None = None,
+    filter_value: str | list[str] | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """Query annotations or validations parquet files.
@@ -556,7 +556,7 @@ def query_annotations(
     Args:
         file: Which file to query — "annotations", "validations", or "cleaned".
         filter_column: Optional column name to filter on.
-        filter_value: Value to match in the filter column.
+        filter_value: Value or list of values to match in the filter column.
         limit: Maximum number of rows to return (default 20).
 
     Returns matching rows as a list of dicts, plus the total count.
@@ -579,7 +579,11 @@ def query_annotations(
                 return {
                     "error": f"Column '{filter_column}' not found. Available: {df.columns}"
                 }
-            df = df.filter(pl.col(filter_column).cast(pl.Utf8) == filter_value)
+            col = pl.col(filter_column).cast(pl.Utf8)
+            if isinstance(filter_value, list):
+                df = df.filter(col.is_in(filter_value))
+            else:
+                df = df.filter(col == filter_value)
         total = len(df)
         rows = df.head(limit).to_dicts()
         columns = df.columns
