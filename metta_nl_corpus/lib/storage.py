@@ -57,6 +57,12 @@ def _columns_from_model(
 _ANNOTATIONS_COLUMNS = _columns_from_model(Annotation, _PRIMARY_KEYS["annotations"])
 _VALIDATIONS_COLUMNS = _columns_from_model(Validation, _PRIMARY_KEYS["validations"])
 
+# Pandera models by table name — used for typed empty DataFrames.
+_TABLE_MODELS: dict[str, type[DataFrameModel]] = {
+    "annotations": Annotation,
+    "validations": Validation,
+}
+
 
 class AnnotationStore:
     """Thread-safe SQLite store for annotations and validations."""
@@ -131,6 +137,15 @@ class AnnotationStore:
         conn.commit()
         logger.debug("Inserted annotation", annotation_id=filtered.get("annotation_id"))
         return str(filtered.get("annotation_id", ""))
+
+    def delete_annotation(self, annotation_id: str) -> bool:
+        """DELETE an annotation by annotation_id. Returns True if a row was deleted."""
+        conn = self._get_conn()
+        cur = conn.execute(
+            "DELETE FROM annotations WHERE annotation_id = ?", (annotation_id,)
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
     def update_annotation(self, annotation_id: str, updates: dict[str, Any]) -> None:
         """UPDATE specific columns of an annotation by annotation_id."""
@@ -262,11 +277,19 @@ class AnnotationStore:
     # -- export / import -------------------------------------------------------
 
     def to_polars(self, table: str = "annotations") -> pl.DataFrame:
-        """Export full table as a Polars DataFrame."""
+        """Export full table as a Polars DataFrame.
+
+        Returns a schema-typed empty DataFrame when the table has no rows,
+        so downstream Pandera validation sees the correct columns/types.
+        """
         conn = self._get_conn()
         cur = conn.execute(f"SELECT * FROM {table}")
         rows = cur.fetchall()
         if not rows:
+            model = _TABLE_MODELS.get(table)
+            if model is not None:
+                dtypes = {k: v.type for k, v in model.to_schema().dtypes.items()}
+                return pl.DataFrame(schema=dtypes)
             return pl.DataFrame()
         dicts = [self._row_to_dict(dict(r), source=table) for r in rows]
         # Use a generous infer_schema_length to handle mixed types

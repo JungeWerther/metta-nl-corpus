@@ -38,12 +38,3 @@ class PipelineRunConfig(BaseModel):
         return f"{self.dataset_config.hf_id}_{self.model_name}_{self.version}".replace(
             "/", "_"
         )
-
-    @property
-    def annotations_path(self) -> Path:
-        """Get the path for annotations for this specific pipeline run."""
-        from metta_nl_corpus.constants import PROJECT_ROOT
-
-        cache_dir = PROJECT_ROOT / "datasets" / "annotations" / self.cache_key
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir / "annotations.parquet"

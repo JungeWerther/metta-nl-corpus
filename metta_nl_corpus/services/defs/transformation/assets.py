@@ -837,6 +837,56 @@ async def process_in_batches_async(
     return processed_rows
 
 
+# USD per 1M tokens by model.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "openai:gpt-4o-mini": (0.15, 0.60),
+    "openai:gpt-4o": (2.50, 10.00),
+}
+
+
+def _log_batch_cost_summary(
+    results: Sequence[GenerateAndValidateResult],
+    model: str,
+) -> None:
+    """Aggregate token usage from results and log estimated cost."""
+    total_input = sum(
+        r.annotation.select("input_tokens").item(0, 0)
+        for r in results
+        if r.annotation is not None
+        and "input_tokens" in r.annotation.columns
+        and r.annotation.select("input_tokens").item(0, 0) is not None
+    )
+    total_output = sum(
+        r.annotation.select("output_tokens").item(0, 0)
+        for r in results
+        if r.annotation is not None
+        and "output_tokens" in r.annotation.columns
+        and r.annotation.select("output_tokens").item(0, 0) is not None
+    )
+    if total_input == 0 and total_output == 0:
+        return
+
+    pricing = _MODEL_PRICING.get(model)
+    if pricing is not None:
+        input_rate, output_rate = pricing
+        cost_usd = (total_input * input_rate + total_output * output_rate) / 1_000_000
+        logger.info(
+            "Batch cost summary",
+            model=model,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            estimated_cost_usd=round(cost_usd, 4),
+        )
+    else:
+        logger.info(
+            "Batch cost summary",
+            model=model,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            estimated_cost_usd="unknown (no pricing for model)",
+        )
+
+
 @asset(required_resource_keys={"pipeline_config"})
 def data_annotations(
     context,
@@ -896,6 +946,9 @@ def data_annotations(
             description="Generating MeTTa annotations",
         )
     )
+
+    # Log cost summary for OpenAI models
+    _log_batch_cost_summary(processed_results, pipeline_config.annotation_model)
 
     # Separate annotations and validations
     annotations_list = [

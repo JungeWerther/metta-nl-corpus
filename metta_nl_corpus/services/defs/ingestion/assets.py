@@ -1,18 +1,14 @@
-from enum import StrEnum
 from pathlib import Path
 
 import polars as pl
 from dagster import AssetExecutionContext, Config, asset
-from dagster._core.definitions.assets.definition.assets_definition import (
-    AssetsDefinition,
-)
 from huggingface_hub import hf_hub_download
 from structlog import getLogger
 
-from metta_nl_corpus.constants import ANNOTATIONS_PATH, VALIDATIONS_PATH
-from metta_nl_corpus.lib.caching import create_empty_parquet_from_schema_if_not_exists
-from metta_nl_corpus.lib.helpers import Always, Box, info, str_index, with_context
+from metta_nl_corpus.constants import ANNOTATIONS_DB_PATH
+from metta_nl_corpus.lib.helpers import Box, info, str_index, with_context
 from metta_nl_corpus.lib.interfaces import Fn
+from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import (
     Annotation,
     RelationKind,
@@ -37,19 +33,6 @@ class BaseConfig(Config):
     version: str | None = None  # <None> for all versions
 
 
-class Dataset(StrEnum):
-    training_data = training_dataset_path
-    annotations = str(ANNOTATIONS_PATH)
-    validations = str(VALIDATIONS_PATH)
-
-
-DATASET_SCHEMAS = {
-    Dataset.training_data: TrainingData,
-    Dataset.annotations: Annotation,
-    Dataset.validations: Validation,
-}
-
-
 type Loader = Fn[Path, Box[pl.DataFrame]]
 
 
@@ -63,67 +46,38 @@ def to_boxed_path_loader(method: Fn[Path, pl.DataFrame]) -> Loader:
     return inner
 
 
-load_ndjson_from_path = to_boxed_path_loader(pl.read_ndjson)
 load_parquet_from_path = to_boxed_path_loader(pl.read_parquet)
 
 
-def load_annotations(file_path: Path) -> pl.DataFrame:
-    df = pl.read_parquet(file_path)
-    if "is_valid" not in df.columns:
-        df = df.with_columns(pl.lit(True).alias("is_valid"))
-    # Add token columns for backward compatibility with older annotation files
-    if "input_tokens" not in df.columns:
-        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("input_tokens"))
-    if "output_tokens" not in df.columns:
-        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("output_tokens"))
-    # Add required Annotation columns if missing (older schema)
-    if "annotation_id" not in df.columns:
-        df = df.with_columns(pl.lit("").alias("annotation_id"))
-    if "generation_model" not in df.columns:
-        df = df.with_columns(pl.lit("").alias("generation_model"))
-    if "system_prompt" not in df.columns:
-        df = df.with_columns(pl.lit("").alias("system_prompt"))
-    # Drop deprecated columns if present (from older schema)
-    for col in ("metta_premise_prompt", "metta_hypothesis_prompt"):
-        if col in df.columns:
-            df = df.drop(col)
-    return df
+@asset
+def raw_training_data(
+    context: AssetExecutionContext, config: BaseConfig
+) -> pl.DataFrame:
+    file_path = Path(training_dataset_path)
+    df = (
+        load_parquet_from_path(file_path)
+        | with_context(context)
+        | info(f"Loading {context.asset_key} from {file_path}")
+    ).data
+    return TrainingData.validate(df)
 
 
-load_annotations_from_path = to_boxed_path_loader(load_annotations)
+@asset
+def cached_annotations(context: AssetExecutionContext) -> pl.DataFrame:
+    """Load cached annotations from SQLite store."""
+    store = AnnotationStore(ANNOTATIONS_DB_PATH)
+    df = store.to_polars("annotations")
+    logger.info("Loaded cached annotations from SQLite", count=len(df))
+    return Annotation.validate(df)
 
 
-def make_asset(name: str, _loader: Loader, dataset: Dataset) -> AssetsDefinition:
-    def inner(context: AssetExecutionContext, config: BaseConfig) -> pl.DataFrame:
-        file_path = Path(dataset)
-        data_model = DATASET_SCHEMAS.get(dataset, Always)
-
-        file_path = create_empty_parquet_from_schema_if_not_exists(
-            data_model, file_path
-        )
-
-        df = (
-            _loader(file_path)
-            | with_context(context)
-            | info(f"Loading {context.asset_key} from {file_path}")
-        ).data
-
-        return data_model.validate(df)
-
-    return asset(name=name)(inner)
-
-
-raw_training_data = make_asset(
-    "raw_training_data", load_parquet_from_path, Dataset.training_data
-)
-
-cached_annotations = make_asset(
-    "cached_annotations", load_annotations_from_path, Dataset.annotations
-)
-
-cached_validations = make_asset(
-    "cached_validations", load_parquet_from_path, Dataset.validations
-)
+@asset
+def cached_validations(context: AssetExecutionContext) -> pl.DataFrame:
+    """Load cached validations from SQLite store."""
+    store = AnnotationStore(ANNOTATIONS_DB_PATH)
+    df = store.to_polars("validations")
+    logger.info("Loaded cached validations from SQLite", count=len(df))
+    return Validation.validate(df)
 
 
 @asset
