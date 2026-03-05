@@ -529,10 +529,8 @@ def _create_annotation_and_validation(
         "system_prompt": system_prompt,
         "version": DATA_VERSION,
     }
-    if input_tokens is not None:
-        record["input_tokens"] = input_tokens
-    if output_tokens is not None:
-        record["output_tokens"] = output_tokens
+    record["input_tokens"] = input_tokens
+    record["output_tokens"] = output_tokens
     annotation = Annotation.validate(pandera_record(record))
 
     is_valid = validate_expressions_by_label(
