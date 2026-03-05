@@ -70,8 +70,26 @@
 
 (= (is-a $x $y) ($y $x))
 
+;; 6. Binary predicate rules
+;;
+;; (rel ob sub) means "all ob are rel to all sub", e.g. (held-by dog human)
+;;
+;; Single-position substitution (instance form): replace a ground instance with its type
+;; e.g. (held-by this-swan this-human) + (human this-human) → (held-by this-swan human)
+;; Works because (human this-human) matches ($x this-human) with $x=human
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $ob) ($rel $x $sub))))
 (= (add-proposition ($rel $ob $sub)) (add-atom &a (=> ($x $sub) ($rel $ob $x))))
+
+;; Ground contradiction axioms (from positive side)
+(= (add-proposition ($rel $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) (is-not $rel $ob $sub)) ⊥)))
+(= (add-proposition ($rel $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) (is-not ($rel $ob $sub))) ⊥)))
+(= (add-proposition ($rel $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) ((is-not $rel) $ob $sub)) ⊥)))
+
+;; Negation-side rules: when adding (is-not rel ob sub), generate contradiction axioms
+;; so that derived facts can contradict the negation
+(= (add-proposition (is-not $rel $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) (is-not $rel $ob $sub)) ⊥)))
+(= (add-proposition (is-not ($rel $ob $sub))) (add-atom &a (=> (, ($rel $ob $sub) (is-not ($rel $ob $sub))) ⊥)))
+(= (add-proposition ((is-not $rel) $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) ((is-not $rel) $ob $sub)) ⊥)))
 
 ;; === PLN Truth Values ===
 ;; (≞ Proposition (STV strength confidence))
