@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -529,10 +529,8 @@ def _create_annotation_and_validation(
         "system_prompt": system_prompt,
         "version": DATA_VERSION,
     }
-    if input_tokens is not None:
-        record["input_tokens"] = input_tokens
-    if output_tokens is not None:
-        record["output_tokens"] = output_tokens
+    record["input_tokens"] = input_tokens
+    record["output_tokens"] = output_tokens
     annotation = Annotation.validate(pandera_record(record))
 
     is_valid = validate_expressions_by_label(
@@ -811,6 +809,8 @@ async def process_in_batches_async(
     subset_size: int,
     batch_size: int,
     description: str = "Processing",
+    on_batch_complete: Callable[[Sequence[GenerateAndValidateResult]], None]
+    | None = None,
 ) -> Sequence[GenerateAndValidateResult]:
     """
     Process rows in batches asynchronously with progress tracking.
@@ -822,6 +822,7 @@ async def process_in_batches_async(
         subset_size: Maximum number of rows to process
         batch_size: Number of rows to process concurrently in each batch
         description: Description for the progress bar
+        on_batch_complete: Optional callback invoked after each batch with its results.
 
     Returns:
         List of processed results
@@ -845,6 +846,9 @@ async def process_in_batches_async(
         # Execute all tasks in the batch concurrently
         batch_results = await asyncio.gather(*tasks)
         processed_rows.extend(batch_results)
+
+        if on_batch_complete is not None:
+            on_batch_complete(batch_results)
 
     return processed_rows
 
@@ -948,6 +952,18 @@ def data_annotations(
 
     rows = dataset_to_annotate.to_dicts()
 
+    # Persist each batch to SQLite immediately so no work is lost
+    annotation_store = AnnotationStore(ANNOTATIONS_DB_PATH)
+
+    def _persist_batch(batch_results: Sequence[GenerateAndValidateResult]) -> None:
+        for result in batch_results:
+            if result.annotation is not None:
+                for row in result.annotation.to_dicts():
+                    annotation_store.insert_annotation(row)
+            if result.validation is not None:
+                for row in result.validation.to_dicts():
+                    annotation_store.insert_validation(row)
+
     # Run async batch processing
     processed_results = asyncio.run(
         process_in_batches_async(
@@ -956,55 +972,16 @@ def data_annotations(
             subset_size=pipeline_config.subset_size,
             batch_size=pipeline_config.batch_size,
             description="Generating MeTTa annotations",
+            on_batch_complete=_persist_batch,
         )
     )
 
     # Log cost summary for OpenAI models
     _log_batch_cost_summary(processed_results, pipeline_config.annotation_model)
 
-    # Separate annotations and validations
-    annotations_list = [
-        result.annotation
-        for result in processed_results
-        if result.annotation is not None
-    ]
-    validations_list = [
-        result.validation
-        for result in processed_results
-        if result.validation is not None
-    ]
-
-    # Create DataFrames by concatenating
-    new_annotations = (
-        pl.concat(annotations_list, how="vertical")
-        if annotations_list
-        else pl.DataFrame()
-    )
-    new_validations = (
-        pl.concat(validations_list, how="vertical")
-        if validations_list
-        else pl.DataFrame()
-    )
-
-    # Combine with cached data
-    all_annotations = (
-        pl.concat([cached_annotations, new_annotations], how="align")
-        if len(cached_annotations)
-        else new_annotations
-    )
-
-    all_validations = (
-        pl.concat([cached_validations, new_validations], how="align")
-        if len(cached_validations)
-        else new_validations
-    )
-
-    # Write to SQLite (atomic inserts) and export parquet for compatibility
-    annotation_store = AnnotationStore(ANNOTATIONS_DB_PATH)
-    for row in new_annotations.to_dicts():
-        annotation_store.insert_annotation(row)
-    for row in new_validations.to_dicts():
-        annotation_store.insert_validation(row)
+    # Reload from SQLite (includes both cached + newly persisted)
+    all_annotations = annotation_store.to_polars("annotations")
+    all_validations = annotation_store.to_polars("validations")
 
     # Export to parquet for HuggingFace / backward compatibility
     annotation_store.export_parquet(ANNOTATIONS_PATH, table="annotations")
