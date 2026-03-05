@@ -850,7 +850,7 @@ def import_annotations_parquet(
 @mcp.tool()
 def revalidate_annotations(
     label: str | None = None,
-    save: bool = False,
+    save: bool = True,
     timeout: int = 5,
     limit: int = 10,
     offset: int = 0,
@@ -862,7 +862,7 @@ def revalidate_annotations(
 
     Args:
         label: Optional label filter (e.g. "entailment", "contradiction", "neutral").
-        save: Whether to persist updated is_valid flags to the DB. Default False (dry run).
+        save: Whether to persist updated is_valid flags to the DB. Default True.
         timeout: Per-row validation timeout in seconds (default 5).
         limit: Max rows to process (0 = all, default 10).
         offset: Number of rows to skip before processing (default 0).
