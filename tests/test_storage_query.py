@@ -105,3 +105,72 @@ class TestBuildWhereUnit:
         clause, params = AnnotationStore._build_where("col", "abc")
         assert "IN" not in clause
         assert params == ("abc",)
+
+
+def _make_row(annotation_id: str, premise: str, hypothesis: str, **overrides):
+    """Helper to build a minimal annotation row."""
+    row = {
+        "annotation_id": annotation_id,
+        "idx": 0,
+        "label": "entailment",
+        "premise": premise,
+        "hypothesis": hypothesis,
+        "metta_premise": f"({premise})",
+        "metta_hypothesis": f"({hypothesis})",
+        "generation_model": "test",
+        "system_prompt": "test",
+        "is_valid": True,
+        "version": "0.0.1",
+    }
+    row.update(overrides)
+    return row
+
+
+class TestDeduplicate:
+    def test_removes_duplicate_premise_hypothesis_pairs(self, tmp_path):
+        s = AnnotationStore(db_path=tmp_path / "dedup.db")
+        s.insert_annotation(_make_row("id-1", "A dog runs", "An animal moves"))
+        s.insert_annotation(_make_row("id-2", "A dog runs", "An animal moves"))
+        s.insert_annotation(_make_row("id-3", "A dog runs", "An animal moves"))
+        s.insert_annotation(_make_row("id-4", "A cat sits", "A feline rests"))
+
+        deleted = s.deduplicate()
+
+        assert deleted == 2
+        result = s.query()
+        assert result["total"] == 2
+        # The latest rowid (id-3) should be kept for the duplicated pair
+        ids = {r["annotation_id"] for r in result["rows"]}
+        assert "id-3" in ids
+        assert "id-4" in ids
+
+    def test_no_duplicates_deletes_nothing(self, tmp_path):
+        s = AnnotationStore(db_path=tmp_path / "nodedup.db")
+        s.insert_annotation(_make_row("id-1", "A", "B"))
+        s.insert_annotation(_make_row("id-2", "C", "D"))
+
+        assert s.deduplicate() == 0
+        assert s.query()["total"] == 2
+
+
+class TestUpsertAnnotation:
+    def test_inserts_when_new(self, tmp_path):
+        s = AnnotationStore(db_path=tmp_path / "upsert.db")
+        aid = s.upsert_annotation(_make_row("id-new", "P", "H"))
+
+        assert aid == "id-new"
+        assert s.query()["total"] == 1
+
+    def test_updates_existing_without_duplicating(self, tmp_path):
+        s = AnnotationStore(db_path=tmp_path / "upsert.db")
+        s.insert_annotation(_make_row("id-1", "P", "H"))
+
+        s.upsert_annotation({"annotation_id": "id-1", "metta_premise": "(updated)"})
+
+        assert s.query()["total"] == 1
+        row = s.get_annotation("id-1")
+        assert row is not None
+        assert row["metta_premise"] == "(updated)"
+        # Original fields preserved
+        assert row["premise"] == "P"
+        assert row["hypothesis"] == "H"
