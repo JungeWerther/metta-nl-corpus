@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Sequence
-from contextvars import ContextVar
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,9 +52,8 @@ logger = getLogger(__name__)
 load_dotenv(".env.local")
 
 # Stores the last generation attempt so callers can retrieve it on validation failure.
-last_generation_attempt: ContextVar[dict[str, Any] | None] = ContextVar(
-    "last_generation_attempt", default=None
-)
+# Module-level dict (not ContextVar) so it's visible across async task boundaries.
+last_generation_attempt: dict[str, Any] = {}
 
 ENTAILMENTS_PATH = PROJECT_ROOT / "metta_nl_corpus/services/spaces/inference.metta"
 CONTRADICTIONS_PATH = (
@@ -166,7 +165,7 @@ class AgentExpressionOutput(BaseModel):
         )
 
         # Store last attempt so callers can retrieve it on failure
-        last_generation_attempt.set(
+        last_generation_attempt.update(
             {
                 "metta_premise": metta_premise,
                 "metta_hypothesis": metta_hypothesis,
@@ -561,6 +560,19 @@ def _create_annotation_and_validation(
     return GenerateAndValidateResult(annotation=annotation, validation=validation)
 
 
+def _recover_last_attempt() -> tuple[str, str, int | None, int | None]:
+    """Recover the last generation attempt after validation failure."""
+    attempt = last_generation_attempt
+    if attempt.get("metta_premise") and attempt.get("metta_hypothesis"):
+        logger.warning(
+            "Recovering last generation attempt (validation failed)",
+            metta_premise=attempt["metta_premise"],
+            metta_hypothesis=attempt["metta_hypothesis"],
+        )
+        return (attempt["metta_premise"], attempt["metta_hypothesis"], None, None)
+    return ("", "", None, None)
+
+
 async def _generate_expressions_async(
     agent: Agent[ExpressionDeps, AgentExpressionOutput],
     premise: str,
@@ -580,7 +592,7 @@ async def _generate_expressions_async(
         result = await agent.run(prompt, deps=deps, model=annotation_model)
     except Exception as e:
         logger.error("Pydantic AI generation failed", error=str(e))
-        return ("", "", None, None)
+        return _recover_last_attempt()
 
     if not result.output:
         logger.error("Failed to generate MeTTa expressions")
@@ -633,7 +645,7 @@ def _generate_expressions_sync(
         result = agent.run_sync(prompt, deps=deps, model=annotation_model)
     except Exception as e:
         logger.error("Pydantic AI generation failed", error=str(e))
-        return ("", "", None, None)
+        return _recover_last_attempt()
 
     if not result.output:
         logger.error("Failed to generate MeTTa expressions")
