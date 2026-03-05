@@ -4,19 +4,19 @@ Run with optional arguments: `/annotate 50` (default: 50), `/annotate 100 offset
 
 Parse `$ARGUMENTS`: extract a number for `limit` (default 50) and if the word `offset` appears, take the number after it as `offset` (default 10000).
 
-## 1. Fetch unannotated pairs
+## 1. Plan agent batches (no fetching in main context)
 
-Call `mcp__metta-nl-corpus__yield_unannotated_pairs` with `limit` and `offset` parsed from the arguments. This returns SNLI premise/hypothesis/label triples that are not yet in the annotation DB.
+Divide `limit` into batches of 25. For each batch, compute the batch-specific `offset` and `limit`:
+- Batch 0: offset=`offset`, limit=25
+- Batch 1: offset=`offset + 25`, limit=25
+- Batch 2: offset=`offset + 50`, limit=25
+- etc. (last batch may have limit < 25)
 
-Show the user a summary: how many pairs returned, label distribution.
+Launch one parallel agent per batch. Do NOT call `yield_unannotated_pairs` in the main context — each agent fetches its own batch.
 
-## 2. Split into agent batches
+## 2. Each agent's task
 
-Write the returned pairs to `/tmp/annotate_pairs.json`. Split into batches of 25, and launch one parallel agent per batch.
-
-## 3. Each agent's task
-
-For every pair in the batch, the agent must:
+The agent first calls `mcp__metta-nl-corpus__yield_unannotated_pairs` with its batch-specific `offset` and `limit` to fetch its own pairs. Then for every pair returned, the agent must:
 
 ### Generate MeTTa expressions
 
@@ -60,7 +60,7 @@ Call `mcp__metta-nl-corpus__validate_relation` again with `store_result: true` t
 
 At the end, the agent reports: how many annotated successfully, how many skipped.
 
-## 4. Final summary
+## 3. Final summary
 
 After all agents complete, show the user:
 - Total pairs processed
