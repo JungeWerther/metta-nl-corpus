@@ -857,6 +857,7 @@ async def process_in_batches_async(
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "openai:gpt-4o-mini": (0.15, 0.60),
     "openai:gpt-4o": (2.50, 10.00),
+    "openai:gpt-5-nano": (0.10, 0.40),
 }
 
 
@@ -920,10 +921,14 @@ def data_annotations(
 
     logger.info("Starting data annotation", pipeline_config=pipeline_config)
 
-    # Get indices not in preprocessed training data
+    # Get unannotated rows, optionally starting from an offset index
     unannotated_data_points = preprocessed_training_data.filter(
         ~pl.col(str(Annotation.index)).is_in(cached_annotations[str(Annotation.index)])
     )
+    if pipeline_config.offset > 0:
+        unannotated_data_points = unannotated_data_points.filter(
+            pl.col(str(Annotation.index)) >= pipeline_config.offset
+        )
 
     # Extract premise, hypothesis, and label columns with index
     dataset_to_annotate = unannotated_data_points.select(
