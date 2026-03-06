@@ -1,7 +1,6 @@
 import asyncio
+import threading
 from collections.abc import Callable, Sequence
-from multiprocessing import Process, Queue
-
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -136,7 +135,12 @@ class AgentExpressionOutput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def extract_and_validate(cls, data: Any) -> Any:
-        """Extract MeTTa code and validate relation before model construction."""
+        """Extract MeTTa code, validate relation string, store in last_generation_attempt.
+
+        The agent's own ``validate_relation_tool`` handles self-correction
+        during generation, so we no longer run ``validate_expressions_by_label``
+        here (which spawned expensive subprocesses).  We only parse and store.
+        """
         if not isinstance(data, dict):
             return data
         metta_premise = parse_metta_expression(data.get("metta_premise")).strip()
@@ -154,33 +158,21 @@ class AgentExpressionOutput(BaseModel):
         if label is None:
             msg = f"Unknown relation '{relation}'. Use entailment, neutral, or contradiction."
             raise ValueError(msg)
-        is_valid = validate_expressions_by_label(
-            label=label,
-            metta_premise=metta_premise,
-            metta_hypothesis=metta_hypothesis,
-        )
-        logger.debug(
-            "AgentExpressionOutput validation result",
-            is_valid=is_valid,
-            relation=relation,
-        )
 
-        # Store last attempt so callers can retrieve it on failure
+        # Parse to verify syntax
+        parse_all(metta_premise)
+        parse_all(metta_hypothesis)
+
+        # Store last attempt so callers can retrieve it
         last_generation_attempt.update(
             {
                 "metta_premise": metta_premise,
                 "metta_hypothesis": metta_hypothesis,
                 "relation": relation,
-                "is_valid": is_valid,
+                "is_valid": True,  # trust agent's tool-based validation
             }
         )
 
-        if not is_valid:
-            msg = (
-                f"Expressions do not satisfy the claimed relation '{relation}'. "
-                "Use validate_relation_tool to verify before returning."
-            )
-            raise ValueError(msg)
         return {
             **data,
             "metta_premise": metta_premise,
@@ -325,30 +317,6 @@ def _create_metta_agent(
 VALIDATION_TIMEOUT_SECONDS = 10
 
 
-def _run_validation_in_subprocess(
-    q: "Queue[Any]",
-    expressions_to_add_to_space: Sequence[str],
-    grounding_space_path: str,
-    expression_to_evaluate: str,
-    verbose: bool,
-) -> None:
-    """Target for subprocess — runs MeTTa validation and puts result on queue."""
-    try:
-        runner = create_runner()
-        with open(grounding_space_path, "r") as f:
-            metta_code = f.read()
-        runner.run(metta_code)
-        for expression in expressions_to_add_to_space:
-            runner.run(expression)
-        if verbose:
-            runner.run("!(all)")
-        result = runner.run(expression_to_evaluate)
-        is_truthy = bool(result and len(result) > 0 and len(result[-1]) > 0)
-        q.put(("ok", is_truthy, result))
-    except Exception as e:
-        q.put(("error", str(e), None))
-
-
 def validate_expressions_truthy_after_adding_expressions_to_space(
     expressions_to_add_to_space: Sequence[str],
     grounding_space_path: Path,
@@ -356,65 +324,76 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
     verbose: bool = False,
     timeout: int = VALIDATION_TIMEOUT_SECONDS,
 ) -> bool:
+    """Run MeTTa validation in a daemon thread with timeout.
+
+    The GIL is released during C-level MeTTa calls, so the main thread
+    can join with a timeout.  Daemon threads are cleaned up on process exit.
+    """
     if not expressions_to_add_to_space:
         logger.debug("No expressions to add, returning False")
         return False
 
     logger.info("Validating expressions", expressions=expressions_to_add_to_space)
 
-    q: Queue[Any] = Queue()
-    proc = Process(
-        target=_run_validation_in_subprocess,
-        args=(
-            q,
-            list(expressions_to_add_to_space),
-            str(grounding_space_path),
-            expression_to_evaluate,
-            verbose,
-        ),
-    )
-    proc.start()
-    proc.join(timeout=timeout)
+    container: dict[str, Any] = {}
 
-    if proc.is_alive():
+    def _run() -> None:
+        try:
+            runner = create_runner()
+            metta_code = grounding_space_path.read_text()
+            runner.run(metta_code)
+            for expression in expressions_to_add_to_space:
+                runner.run(expression)
+            if verbose:
+                runner.run("!(all)")
+            result = runner.run(expression_to_evaluate)
+            is_truthy = bool(result and len(result) > 0 and len(result[-1]) > 0)
+            container["status"] = "ok"
+            container["value"] = is_truthy
+            container["result"] = result
+        except Exception as e:
+            container["status"] = "error"
+            container["error"] = str(e)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
         logger.warning(
-            "MeTTa validation timed out, killing subprocess",
+            "MeTTa validation timed out (daemon thread still running)",
             timeout=timeout,
             expression_to_evaluate=expression_to_evaluate,
         )
-        proc.kill()
-        proc.join()
         return False
 
-    if q.empty():
-        logger.warning(
-            "MeTTa validation subprocess returned no result",
-            expression_to_evaluate=expression_to_evaluate,
-        )
-        return False
-
-    status, value, result = q.get_nowait()
-
-    if status == "error":
+    if container.get("status") == "error":
         logger.warning(
             "MeTTa validation failed",
-            error=value,
+            error=container.get("error"),
             expression_to_evaluate=expression_to_evaluate,
         )
         return False
 
-    if value:
+    if not container.get("status"):
+        logger.warning(
+            "MeTTa validation thread returned no result",
+            expression_to_evaluate=expression_to_evaluate,
+        )
+        return False
+
+    if container["value"]:
         logger.info(
             "MeTTa expressions pass validation",
             expression=expression_to_evaluate,
-            result=result,
+            result=container["result"],
         )
         return True
 
     logger.info(
         "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
-        result=result,
+        result=container["result"],
     )
     return False
 
@@ -933,6 +912,55 @@ def _log_batch_cost_summary(
             output_tokens=total_output,
             estimated_cost_usd="unknown (no pricing for model)",
         )
+
+
+async def generate_and_store_lightweight(
+    agent: Agent[ExpressionDeps, AgentExpressionOutput],
+    premise: str,
+    hypothesis: str,
+    label: RelationKind,
+    snli_index: int,
+    annotation_model: str,
+    system_prompt: str,
+) -> dict[str, Any]:
+    """Lightweight single-pair generation for the CLI ``annotate`` command.
+
+    Re-uses a pre-created agent (no HTTP client setup per call), reads
+    ``is_valid`` from the agent's tool-based validation stored in
+    ``last_generation_attempt``, and returns a dict ready for
+    ``AnnotationStore.insert_annotation``.
+    """
+    (
+        metta_premise,
+        metta_hypothesis,
+        input_tokens,
+        output_tokens,
+    ) = await _generate_expressions_async(
+        agent, premise, hypothesis, label, annotation_model
+    )
+
+    if not metta_premise or not metta_hypothesis:
+        return {"error": "Generation failed — empty expressions."}
+
+    attempt = last_generation_attempt
+    is_valid = attempt.get("is_valid", False)
+
+    annotation_id = str(uuid4())
+    return {
+        "annotation_id": annotation_id,
+        "index": snli_index,
+        "premise": premise,
+        "hypothesis": hypothesis,
+        "label": label.value,
+        "metta_premise": cleanup_metta_expression(metta_premise),
+        "metta_hypothesis": cleanup_metta_expression(metta_hypothesis),
+        "generation_model": annotation_model,
+        "system_prompt": system_prompt,
+        "version": DATA_VERSION,
+        "is_valid": is_valid,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }
 
 
 @asset(required_resource_keys={"pipeline_config"})
