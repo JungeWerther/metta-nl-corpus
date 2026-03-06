@@ -418,14 +418,6 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
     )
     return False
 
-    logger.info(
-        "MeTTa expressions are not valid.",
-        expression=expression_to_evaluate,
-        result=result,
-    )
-
-    return False
-
 
 def validate_expressions_are_entailing(
     metta_premise: str, metta_hypothesis: str, verbose: bool = False
