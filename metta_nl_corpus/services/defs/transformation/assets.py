@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from multiprocessing import Process, Queue
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -324,7 +324,29 @@ def _create_metta_agent(
 
 VALIDATION_TIMEOUT_SECONDS = 10
 
-_timeout_executor = ThreadPoolExecutor(max_workers=1)
+
+def _run_validation_in_subprocess(
+    q: "Queue[Any]",
+    expressions_to_add_to_space: Sequence[str],
+    grounding_space_path: str,
+    expression_to_evaluate: str,
+    verbose: bool,
+) -> None:
+    """Target for subprocess — runs MeTTa validation and puts result on queue."""
+    try:
+        runner = create_runner()
+        with open(grounding_space_path, "r") as f:
+            metta_code = f.read()
+        runner.run(metta_code)
+        for expression in expressions_to_add_to_space:
+            runner.run(expression)
+        if verbose:
+            runner.run("!(all)")
+        result = runner.run(expression_to_evaluate)
+        is_truthy = bool(result and len(result) > 0 and len(result[-1]) > 0)
+        q.put(("ok", is_truthy, result))
+    except Exception as e:
+        q.put(("error", str(e), None))
 
 
 def validate_expressions_truthy_after_adding_expressions_to_space(
@@ -340,68 +362,60 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
 
     logger.info("Validating expressions", expressions=expressions_to_add_to_space)
 
-    try:
-        runner = create_runner()
+    q: Queue[Any] = Queue()
+    proc = Process(
+        target=_run_validation_in_subprocess,
+        args=(
+            q,
+            list(expressions_to_add_to_space),
+            str(grounding_space_path),
+            expression_to_evaluate,
+            verbose,
+        ),
+    )
+    proc.start()
+    proc.join(timeout=timeout)
 
-        # Read the file content
-        with open(grounding_space_path, "r") as f:
-            metta_code = f.read()
-
-        logger.debug("Loading grounding space", path=str(grounding_space_path))
-        space_result = runner.run(metta_code)
-        logger.debug("Grounding space loaded", result=space_result)
-
-        # Run premise and hypothesis
-        for expression in expressions_to_add_to_space:
-            add_result = runner.run(expression)
-            logger.debug("Added expression", expression=expression, result=add_result)
-
-        # Dump everything in the space before evaluation
-        if verbose:
-            all_atoms = runner.run("!(all)")
-            logger.debug("Space contents before evaluation", all_atoms=all_atoms)
-
-        # Check for intersection between truth and falsity spaces (with timeout)
-        future = _timeout_executor.submit(runner.run, expression_to_evaluate)
-        try:
-            result = future.result(timeout=timeout)
-        except FuturesTimeoutError:
-            logger.warning(
-                "MeTTa validation timed out",
-                timeout=timeout,
-                expression_to_evaluate=expression_to_evaluate,
-            )
-            return False
-
-        logger.info(
-            "MeTTa validation result",
-            result=result,
+    if proc.is_alive():
+        logger.warning(
+            "MeTTa validation timed out, killing subprocess",
+            timeout=timeout,
             expression_to_evaluate=expression_to_evaluate,
         )
+        proc.kill()
+        proc.join()
+        return False
 
-        # result is a list of results (atoms)
-        if result and len(result) > 0 and len(result[-1]) > 0:
-            logger.info(
-                "MeTTa expressions pass validation",
-                expression=expression_to_evaluate,
-                result=result,
-            )
-            return True
-
-    except Exception as e:
+    if q.empty():
         logger.warning(
-            "MeTTa validation failed",
-            error=str(e),
+            "MeTTa validation subprocess returned no result",
             expression_to_evaluate=expression_to_evaluate,
         )
         return False
+
+    status, value, result = q.get_nowait()
+
+    if status == "error":
+        logger.warning(
+            "MeTTa validation failed",
+            error=value,
+            expression_to_evaluate=expression_to_evaluate,
+        )
+        return False
+
+    if value:
+        logger.info(
+            "MeTTa expressions pass validation",
+            expression=expression_to_evaluate,
+            result=result,
+        )
+        return True
 
     logger.info(
         "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
         result=result,
     )
-
     return False
 
 
