@@ -1,6 +1,7 @@
 """Main CLI entry point for running the annotation pipeline."""
 
 import asyncio
+from pathlib import Path
 
 import click
 from structlog import get_logger
@@ -387,6 +388,58 @@ async def _run_annotate(
         output_tokens=total_output_tokens,
         estimated_cost=cost_str,
     )
+
+
+@cli.command(name="push-dataset")
+@click.option(
+    "--repo-id",
+    default="JungeWerther/metta-nl-corpus",
+    help="HuggingFace dataset repository ID",
+)
+@click.option(
+    "--table",
+    default="annotations",
+    type=click.Choice(["annotations", "validations"]),
+    help="Which table to export",
+)
+@click.option(
+    "--private/--public",
+    default=False,
+    help="Whether the dataset repo should be private",
+)
+def push_dataset(repo_id: str, table: str, private: bool):
+    """Export annotations from SQLite and push to HuggingFace Hub."""
+    from tempfile import TemporaryDirectory
+
+    from huggingface_hub import HfApi
+
+    from metta_nl_corpus.constants import ANNOTATIONS_DB_PATH
+    from metta_nl_corpus.lib.storage import AnnotationStore
+
+    store = AnnotationStore(ANNOTATIONS_DB_PATH)
+    api = HfApi()
+
+    with TemporaryDirectory() as tmpdir:
+        parquet_path = Path(tmpdir) / f"{table}.parquet"
+        row_count = store.export_parquet(parquet_path, table=table)
+
+        if row_count == 0:
+            logger.error("No rows to export", table=table)
+            return
+
+        api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+        api.upload_file(
+            path_or_fileobj=str(parquet_path),
+            path_in_repo=f"{table}.parquet",
+            repo_id=repo_id,
+            repo_type="dataset",
+        )
+        logger.info(
+            "Pushed to HuggingFace Hub",
+            repo_id=repo_id,
+            table=table,
+            rows=row_count,
+        )
 
 
 if __name__ == "__main__":
