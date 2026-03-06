@@ -869,56 +869,12 @@ def yield_unannotated_pairs(
 
     Returns a list of dicts with premise, hypothesis, label, and snli_index.
     """
-    from metta_nl_corpus.lib.helpers import str_index
-
-    snli_path = Path(
-        __import__("huggingface_hub").hf_hub_download(
-            repo_id="stanfordnlp/snli",
-            filename="plain_text/train-00000-of-00001.parquet",
-            repo_type="dataset",
-        )
-    )
-    df = pl.read_parquet(snli_path)
-
-    # Map integer labels to strings
-    label_fn = str_index(RelationKind, RelationKind.NO_LABEL)
-    df = df.with_row_index("snli_index").with_columns(
-        pl.col("label").map_elements(label_fn, return_dtype=pl.Utf8).alias("label_str")
+    from metta_nl_corpus.lib.data_source import (
+        yield_unannotated_pairs as _yield_pairs,
     )
 
-    # Slice from offset
-    df = df.filter(pl.col("snli_index") >= offset)
-
-    # Filter by label if requested
-    if label:
-        df = df.filter(pl.col("label_str") == label.lower().strip())
-
-    # Exclude no_label rows
-    df = df.filter(pl.col("label_str") != RelationKind.NO_LABEL.value)
-
-    # Get existing (premise, hypothesis) pairs from SQLite
-    conn = store._get_conn()
-    existing = {
-        (row[0], row[1])
-        for row in conn.execute(
-            "SELECT premise, hypothesis FROM annotations"
-        ).fetchall()
-    }
-
-    results: list[dict[str, Any]] = []
-    for row in df.iter_rows(named=True):
-        if len(results) >= limit:
-            break
-        key = (row["premise"], row["hypothesis"])
-        if key not in existing:
-            results.append(
-                {
-                    "snli_index": row["snli_index"],
-                    "premise": row["premise"],
-                    "hypothesis": row["hypothesis"],
-                    "label": row["label_str"],
-                }
-            )
+    pairs = _yield_pairs(store, limit=limit, offset=offset, label=label)
+    results = [pair._asdict() for pair in pairs]
 
     return {
         "total_available": len(results),

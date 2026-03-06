@@ -1,8 +1,5 @@
 """Tests for the Pydantic AI MeTTa expression generation agent."""
 
-import pytest
-from pydantic import ValidationError
-
 from metta_nl_corpus.services.defs.transformation.assets import (
     AgentExpressionOutput,
     ExpressionDeps,
@@ -104,12 +101,16 @@ def test_agent_expression_output_valid_entailment():
     assert output.relation == "entailment"
 
 
-def test_agent_expression_output_rejects_invalid_relation():
-    """AgentExpressionOutput raises when expressions don't match claimed relation."""
-    with pytest.raises(ValidationError) as exc_info:
-        AgentExpressionOutput(
-            metta_premise="(A B)",
-            metta_hypothesis="(is-not A B)",  # contradiction, not entailment
-            relation="entailment",
-        )
-    assert "do not satisfy" in str(exc_info.value)
+def test_agent_expression_output_accepts_parseable_expressions():
+    """AgentExpressionOutput accepts any parseable MeTTa with a valid relation string.
+
+    Validation of the logical relation is handled by the agent's own
+    ``validate_relation_tool`` during generation, not at model construction time.
+    """
+    output = AgentExpressionOutput(
+        metta_premise="(A B)",
+        metta_hypothesis="(is-not A B)",
+        relation="entailment",
+    )
+    assert output.metta_premise == "(A B)"
+    assert output.relation == "entailment"
