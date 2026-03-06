@@ -1,6 +1,6 @@
 import asyncio
-import signal
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -324,13 +324,7 @@ def _create_metta_agent(
 
 VALIDATION_TIMEOUT_SECONDS = 10
 
-
-class _ValidationTimeout(Exception):
-    pass
-
-
-def _timeout_handler(signum: int, frame: Any) -> None:
-    raise _ValidationTimeout("MeTTa validation timed out")
+_timeout_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def validate_expressions_truthy_after_adding_expressions_to_space(
@@ -368,13 +362,16 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             logger.debug("Space contents before evaluation", all_atoms=all_atoms)
 
         # Check for intersection between truth and falsity spaces (with timeout)
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(timeout)
+        future = _timeout_executor.submit(runner.run, expression_to_evaluate)
         try:
-            result = runner.run(expression_to_evaluate)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+            result = future.result(timeout=timeout)
+        except FuturesTimeoutError:
+            logger.warning(
+                "MeTTa validation timed out",
+                timeout=timeout,
+                expression_to_evaluate=expression_to_evaluate,
+            )
+            return False
 
         logger.info(
             "MeTTa validation result",
@@ -390,14 +387,6 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
                 result=result,
             )
             return True
-
-    except _ValidationTimeout:
-        logger.warning(
-            "MeTTa validation timed out",
-            timeout=timeout,
-            expression_to_evaluate=expression_to_evaluate,
-        )
-        return False
 
     except Exception as e:
         logger.warning(
