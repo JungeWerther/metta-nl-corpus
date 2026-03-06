@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from collections.abc import Callable, Sequence
 
 from dataclasses import dataclass
@@ -321,11 +322,23 @@ def _create_metta_agent(
     return agent
 
 
+VALIDATION_TIMEOUT_SECONDS = 10
+
+
+class _ValidationTimeout(Exception):
+    pass
+
+
+def _timeout_handler(signum: int, frame: Any) -> None:
+    raise _ValidationTimeout("MeTTa validation timed out")
+
+
 def validate_expressions_truthy_after_adding_expressions_to_space(
     expressions_to_add_to_space: Sequence[str],
     grounding_space_path: Path,
     expression_to_evaluate: str,
     verbose: bool = False,
+    timeout: int = VALIDATION_TIMEOUT_SECONDS,
 ) -> bool:
     if not expressions_to_add_to_space:
         logger.debug("No expressions to add, returning False")
@@ -354,8 +367,15 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             all_atoms = runner.run("!(all)")
             logger.debug("Space contents before evaluation", all_atoms=all_atoms)
 
-        # Check for intersection between truth and falsity spaces
-        result = runner.run(expression_to_evaluate)
+        # Check for intersection between truth and falsity spaces (with timeout)
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(timeout)
+        try:
+            result = runner.run(expression_to_evaluate)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
         logger.info(
             "MeTTa validation result",
             result=result,
@@ -370,6 +390,14 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
                 result=result,
             )
             return True
+
+    except _ValidationTimeout:
+        logger.warning(
+            "MeTTa validation timed out",
+            timeout=timeout,
+            expression_to_evaluate=expression_to_evaluate,
+        )
+        return False
 
     except Exception as e:
         logger.warning(
@@ -857,6 +885,7 @@ async def process_in_batches_async(
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "openai:gpt-4o-mini": (0.15, 0.60),
     "openai:gpt-4o": (2.50, 10.00),
+    "openai:gpt-5-nano": (0.10, 0.40),
 }
 
 
@@ -920,10 +949,14 @@ def data_annotations(
 
     logger.info("Starting data annotation", pipeline_config=pipeline_config)
 
-    # Get indices not in preprocessed training data
+    # Get unannotated rows, optionally starting from an offset index
     unannotated_data_points = preprocessed_training_data.filter(
         ~pl.col(str(Annotation.index)).is_in(cached_annotations[str(Annotation.index)])
     )
+    if pipeline_config.offset > 0:
+        unannotated_data_points = unannotated_data_points.filter(
+            pl.col(str(Annotation.index)) >= pipeline_config.offset
+        )
 
     # Extract premise, hypothesis, and label columns with index
     dataset_to_annotate = unannotated_data_points.select(

@@ -496,10 +496,11 @@ async def generate_and_validate(
 async def run_pipeline(
     subset_size: int = 10,
     batch_size: int = 10,
-    annotation_model: str = "openai:gpt-4o-mini",
+    annotation_model: str = "openai:gpt-5-nano",
     hf_id: str = "squad",
     filename: str = "train.parquet",
     split: str = "train",
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Execute the full batch annotation pipeline.
 
@@ -510,6 +511,7 @@ async def run_pipeline(
         hf_id: HuggingFace dataset ID.
         filename: Filename within the dataset repository.
         split: Dataset split.
+        offset: Start processing from this training data index.
 
     Returns execution status and result counts.
     """
@@ -533,6 +535,7 @@ async def run_pipeline(
         subset_size=subset_size,
         batch_size=batch_size,
         annotation_model=annotation_model,
+        offset=offset,
     )
 
     executor = PipelineExecutor()

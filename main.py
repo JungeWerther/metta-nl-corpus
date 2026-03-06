@@ -61,7 +61,7 @@ def cli():
 )
 @click.option(
     "--annotation-model",
-    default="openai:gpt-4o-mini",
+    default="openai:gpt-5-nano",
     help="Model to use for annotation generation",
 )
 def run(
