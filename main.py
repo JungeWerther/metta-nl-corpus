@@ -430,7 +430,7 @@ def push_dataset(repo_id: str, table: str, private: bool):
         api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
         api.upload_file(
             path_or_fileobj=str(parquet_path),
-            path_in_repo=f"{table}.parquet",
+            path_in_repo=f"data/{table}.parquet",
             repo_id=repo_id,
             repo_type="dataset",
         )
