@@ -1,6 +1,6 @@
 """IO monad for MeTTa expression pipeline.
 
-Vendored from JungeWerther/from (MIT license) with MeTTa-specific extensions.
+Extends the From library (JungeWerther/from) with a traceable IO monad.
 Wraps side-effectful operations (parsing, validation, storage) in a monadic
 chain so that each step is composable, traceable, and short-circuit-safe.
 """
@@ -11,73 +11,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from encapsulation.base import From
 from structlog import get_logger
 
 logger = get_logger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Core From monad (vendored from encapsulation.base, MIT)
-# ---------------------------------------------------------------------------
-
-
-class From[T]:
-    """Base monadic wrapper with bind (<<) and effect (&) operators."""
-
-    def __init__(self, val: T = None) -> None:
-        self.val = val
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, From) and self.val == other.val
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} val=({self.val})>"
-
-    def __bool__(self) -> bool:
-        return self.val is not None
-
-    def __lshift__[U](self, method: Callable[[T], U]) -> From[U]:
-        return self.bind(method)
-
-    def __and__(self, method: Callable[[T], Any]) -> From[T]:
-        return self.effect(method)
-
-    @classmethod
-    def unit[U](cls, val: U) -> From[U]:
-        return cls(val)
-
-    def bind[U](self, func: Callable[[T], U]) -> From[U]:
-        return self.unit(func(self.val))
-
-    def effect(self, func: Callable[[T], Any]) -> From[T]:
-        func(self.val)
-        return self
-
-
-class Just[T](From[T]):
-    pass
-
-
-class Nothing(From[None]):
-    pass
-
-
-class Result[T](From[T]):
-    """Result monad — catches exceptions and wraps them as Err."""
-
-    def bind[U](self, func: Callable[[T], U]) -> Ok[U] | Err:
-        try:
-            return Ok(func(self.val))
-        except Exception as e:
-            return Err(e)
-
-
-class Ok[T](Result[T]):
-    pass
-
-
-class Err(Result[Exception]):
-    pass
+# Re-export From primitives for convenience
+__all__ = ["From", "IO", "IOStep"]
 
 
 # ---------------------------------------------------------------------------
