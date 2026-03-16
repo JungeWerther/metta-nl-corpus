@@ -7,6 +7,7 @@ Context Protocol.
 
 from __future__ import annotations
 
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -37,6 +38,9 @@ ENTAILMENTS_PETTA_PATH = (
 )
 CONTRADICTIONS_PATH = (
     PROJECT_ROOT / "metta_nl_corpus/services/spaces/contradictions.metta"
+)
+UPPER_ONTOLOGY_PATH = (
+    PROJECT_ROOT / "metta_nl_corpus/services/spaces/upper-ontology.metta"
 )
 
 mcp = FastMCP(
@@ -1161,8 +1165,16 @@ class _CachedSpace:
         if self._runner is None:
             self._runner = JanusPeTTaRunner()
             self._runner.load_file(str(ENTAILMENTS_PETTA_PATH))
+            self._runner.load_file(str(UPPER_ONTOLOGY_PATH))
+            self._load_ontology_as_propositions()
             logger.info("cached_space_initialized")
         return self._runner
+
+    def _load_ontology_as_propositions(self) -> None:
+        """Load upper ontology is-a declarations into &a as propositions."""
+        text = UPPER_ONTOLOGY_PATH.read_text()
+        for child, parent in re.findall(r"\(is-a (\S+) (\S+)\)", text):
+            self._runner.run(f"!(add-proposition ({parent} {child}))")  # type: ignore[union-attr]
 
     def _load_expressions(self, expressions: list[str]) -> None:
         runner = self._ensure_runner()
