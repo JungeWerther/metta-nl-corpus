@@ -26,8 +26,10 @@ dependencies = [
     "numpy>=2.4.3",
     "scikit-learn>=1.8.0",
     "encapsulation",
-    "janus-swi>=1.5.2",
 ]
+
+[project.optional-dependencies]
+petta = ["janus-swi>=1.5.2"]
 
 [build-system]
 requires = ["hatchling"]

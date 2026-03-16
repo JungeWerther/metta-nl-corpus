@@ -1784,7 +1784,6 @@ dependencies = [
     { name = "encapsulation" },
     { name = "huggingface-hub" },
     { name = "hyperon" },
-    { name = "janus-swi" },
     { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
     { name = "ollama" },
@@ -1800,6 +1799,11 @@ dependencies = [
     { name = "starlette" },
     { name = "tqdm" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+petta = [
+    { name = "janus-swi" },
 ]
 
 [package.dev-dependencies]
@@ -1818,7 +1822,7 @@ requires-dist = [
     { name = "encapsulation", git = "https://github.com/JungeWerther/from.git" },
     { name = "huggingface-hub", specifier = ">=0.34.4" },
     { name = "hyperon", specifier = ">=0.2.8" },
-    { name = "janus-swi", specifier = ">=1.5.2" },
+    { name = "janus-swi", marker = "extra == 'petta'", specifier = ">=1.5.2" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.4.3" },
     { name = "ollama", specifier = ">=0.5.3" },
@@ -1835,6 +1839,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "uvicorn", specifier = ">=0.30.0" },
 ]
+provides-extras = ["petta"]
 
 [package.metadata.requires-dev]
 dev = [
