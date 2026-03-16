@@ -23,6 +23,7 @@ from metta_nl_corpus.constants import (
     VALIDATIONS_PATH,
 )
 from metta_nl_corpus.lib.helpers import parse_all
+from metta_nl_corpus.lib.io import IO
 from metta_nl_corpus.lib.runner import create_runner
 from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import RelationKind
@@ -1037,4 +1038,89 @@ def revalidate_annotations(
         "counts": counts,
         "results": results[:100],
         "truncated": len(results) > 100,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Subprompt — IO-monadic parse-validate-store pipeline
+# ---------------------------------------------------------------------------
+
+
+def _parse_expressions(text: str) -> list[str]:
+    """Parse MeTTa code into atom strings."""
+    atoms = parse_all(text)
+    if not atoms:
+        raise ValueError("No valid MeTTa atoms found.")
+    return [str(a) for a in atoms]
+
+
+def _store_expressions(
+    sentence: str,
+    expressions: str,
+    model: str,
+) -> dict[str, Any]:
+    """Store parsed expressions in the annotation DB."""
+    annotation_id = str(uuid.uuid4())
+    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
+    store.insert_annotation(
+        {
+            "annotation_id": annotation_id,
+            "index": 0,
+            "premise": sentence,
+            "hypothesis": None,
+            "label": RelationKind.EXPRESSION.value,
+            "metta_premise": expressions.strip(),
+            "metta_hypothesis": None,
+            "generation_model": model,
+            "system_prompt": system_prompt,
+            "version": "0.0.4",
+            "is_valid": True,
+            "input_tokens": None,
+            "output_tokens": None,
+        }
+    )
+    return {"annotation_id": annotation_id}
+
+
+@mcp.tool()
+def subprompt(
+    sentence: str,
+    metta_expressions: str,
+    model: str = "claude-opus-4-6",
+) -> dict[str, Any]:
+    """Parse, validate, and store MeTTa expressions via an IO monad chain.
+
+    Accepts a natural-language sentence and its MeTTa translation. Runs the
+    full pipeline (parse -> validate -> store) as a monadic IO chain, returning
+    a trace of each step.
+
+    Args:
+        sentence: The original natural-language sentence.
+        metta_expressions: Generated MeTTa expressions (newline-separated).
+        model: Which model generated the expressions.
+
+    Returns a summary with step trace and the stored annotation_id.
+    """
+    result = IO(metta_expressions) << _parse_expressions & (
+        lambda atoms: logger.info("parsed", atoms=atoms)
+    )
+
+    if not result.succeeded:
+        return {**result.summary(), "success": False}
+
+    # Store the original text (not the atom list) in the DB
+    store_result = IO(metta_expressions) << (
+        lambda expr: _store_expressions(sentence, expr, model)
+    )
+
+    # Merge traces
+    merged = IO.unit(
+        store_result.val,
+        [*result.log, *store_result.log],
+    )
+
+    return {
+        **merged.summary(),
+        "success": merged.succeeded,
+        "atoms": result.val,
     }
