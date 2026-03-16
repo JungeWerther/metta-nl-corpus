@@ -1058,6 +1058,16 @@ def _parse_expressions(text: str) -> list[str]:
     return [str(a) for a in atoms]
 
 
+_ANNOTATION_GUIDELINE_CACHE: str | None = None
+
+
+def _get_annotation_guideline() -> str:
+    global _ANNOTATION_GUIDELINE_CACHE
+    if _ANNOTATION_GUIDELINE_CACHE is None:
+        _ANNOTATION_GUIDELINE_CACHE = ANNOTATION_GUIDELINE_PATH.read_text()
+    return _ANNOTATION_GUIDELINE_CACHE
+
+
 def _store_expressions(
     sentence: str,
     expressions: str,
@@ -1065,7 +1075,6 @@ def _store_expressions(
 ) -> dict[str, Any]:
     """Store parsed expressions in the annotation DB."""
     annotation_id = str(uuid.uuid4())
-    system_prompt = ANNOTATION_GUIDELINE_PATH.read_text()
     store.insert_annotation(
         {
             "annotation_id": annotation_id,
@@ -1076,7 +1085,7 @@ def _store_expressions(
             "metta_premise": expressions.strip(),
             "metta_hypothesis": None,
             "generation_model": model,
-            "system_prompt": system_prompt,
+            "system_prompt": _get_annotation_guideline(),
             "version": "0.0.4",
             "is_valid": True,
             "input_tokens": None,
@@ -1086,17 +1095,28 @@ def _store_expressions(
     return {"annotation_id": annotation_id}
 
 
+def _load_into_cached_space(metta_expressions: str) -> None:
+    """Incrementally add new expressions to the persistent PeTTa space."""
+    try:
+        atoms = parse_all(metta_expressions)
+        runner = _cached_space._ensure_runner()
+        for atom in atoms:
+            runner.run(f"!(add-proposition {atom})")
+        _cached_space._loaded_count += len(atoms)
+    except Exception:
+        _cached_space.invalidate()
+
+
 @mcp.tool()
 def subprompt(
     sentence: str,
     metta_expressions: str,
     model: str = "claude-opus-4-6",
 ) -> dict[str, Any]:
-    """Parse, validate, and store MeTTa expressions via an IO monad chain.
+    """Parse, validate, store, and load MeTTa expressions in one IO chain.
 
-    Accepts a natural-language sentence and its MeTTa translation. Runs the
-    full pipeline (parse -> validate -> store) as a monadic IO chain, returning
-    a trace of each step.
+    Single-pass pipeline: parse -> store -> load into cached space.
+    New facts are immediately queryable after this call.
 
     Args:
         sentence: The original natural-language sentence.
@@ -1105,28 +1125,16 @@ def subprompt(
 
     Returns a summary with step trace and the stored annotation_id.
     """
-    result = IO(metta_expressions) << _parse_expressions & (
-        lambda atoms: logger.info("parsed", atoms=atoms)
-    )
-
-    if not result.succeeded:
-        return {**result.summary(), "success": False}
-
-    # Store the original text (not the atom list) in the DB
-    store_result = IO(metta_expressions) << (
-        lambda expr: _store_expressions(sentence, expr, model)
-    )
-
-    # Merge traces
-    merged = IO.unit(
-        store_result.val,
-        [*result.log, *store_result.log],
+    result = (
+        IO(metta_expressions) << _parse_expressions
+        & (lambda atoms: logger.info("parsed", atoms=atoms))
+    ) << (lambda _atoms: _store_expressions(sentence, metta_expressions, model)) & (
+        lambda stored: _load_into_cached_space(metta_expressions)
     )
 
     return {
-        **merged.summary(),
-        "success": merged.succeeded,
-        "atoms": result.val,
+        **result.summary(),
+        "success": result.succeeded,
     }
 
 
