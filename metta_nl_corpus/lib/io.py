@@ -9,14 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any
 
 from structlog import get_logger
 
 logger = get_logger(__name__)
-
-T = TypeVar("T")
-U = TypeVar("U")
 
 
 # ---------------------------------------------------------------------------
@@ -39,17 +36,17 @@ class From[T]:
     def __bool__(self) -> bool:
         return self.val is not None
 
-    def __lshift__(self, method: Callable[[T], U]) -> From[U]:
+    def __lshift__[U](self, method: Callable[[T], U]) -> From[U]:
         return self.bind(method)
 
     def __and__(self, method: Callable[[T], Any]) -> From[T]:
         return self.effect(method)
 
     @classmethod
-    def unit(cls, val: U) -> From[U]:
+    def unit[U](cls, val: U) -> From[U]:
         return cls(val)
 
-    def bind(self, func: Callable[[T], U]) -> From[U]:
+    def bind[U](self, func: Callable[[T], U]) -> From[U]:
         return self.unit(func(self.val))
 
     def effect(self, func: Callable[[T], Any]) -> From[T]:
@@ -57,7 +54,7 @@ class From[T]:
         return self
 
 
-class Just(From[T]):
+class Just[T](From[T]):
     pass
 
 
@@ -65,17 +62,17 @@ class Nothing(From[None]):
     pass
 
 
-class Result(From[T]):
+class Result[T](From[T]):
     """Result monad — catches exceptions and wraps them as Err."""
 
-    def bind(self, func: Callable[[T], U]) -> Ok[U] | Err:
+    def bind[U](self, func: Callable[[T], U]) -> Ok[U] | Err:
         try:
             return Ok(func(self.val))
         except Exception as e:
             return Err(e)
 
 
-class Ok(Result[T]):
+class Ok[T](Result[T]):
     pass
 
 
@@ -99,7 +96,7 @@ class IOStep:
 
 
 @dataclass
-class IO(From[T]):
+class IO[T](From[T]):
     """IO monad that records each effectful step for traceability.
 
     Usage:
@@ -121,10 +118,10 @@ class IO(From[T]):
         return f"<IO[{status}] steps={len(self.log)} val={self.val!r}>"
 
     @classmethod
-    def unit(cls, val: U, log: list[IOStep] | None = None) -> IO[U]:
+    def unit[U](cls, val: U, log: list[IOStep] | None = None) -> IO[U]:
         return cls(val=val, log=log or [])
 
-    def bind(self, func: Callable[[T], U]) -> IO[U]:
+    def bind[U](self, func: Callable[[T], U]) -> IO[U]:
         step_name = getattr(func, "__name__", str(func))
         try:
             output = func(self.val)
