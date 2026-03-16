@@ -1,13 +1,15 @@
 """MeTTa execution backend adapter.
 
 Provides a unified interface for running MeTTa code via either the
-hyperon-experimental runtime or the PeTTa (Prolog-based) transpiler.
+hyperon-experimental runtime, the PeTTa subprocess transpiler, or the
+JanusPeTTa in-process backend (PeTTa via janus-swi).
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Sequence
 from enum import StrEnum
@@ -49,9 +51,22 @@ def _deserialize_from_petta(text: str) -> str:
     return text
 
 
+def _default_petta_path() -> str:
+    """Resolve PeTTa path from env or standard location."""
+    path = os.environ.get("PETTA_PATH")
+    if path:
+        return path
+    candidate = os.path.expanduser("~/sites/PeTTa")
+    if os.path.isdir(candidate):
+        return candidate
+    msg = "PETTA_PATH env var is required when METTA_BACKEND=petta (or ~/sites/PeTTa must exist)"
+    raise ValueError(msg)
+
+
 class MeTTaBackend(StrEnum):
     HYPERON = "hyperon"
     PETTA = "petta"
+    JANUS = "janus"
 
 
 class MeTTaRunner(Protocol):
@@ -118,6 +133,51 @@ class PeTTaRunner:
         return _parse_petta_output(result.stdout)
 
 
+class JanusPeTTaRunner:
+    """In-process PeTTa runner via janus-swi — no subprocess, persistent state.
+
+    Consults the PeTTa Prolog source once (globally), then each ``run``
+    call transpiles MeTTa to Prolog and evaluates in-process.  The SWI-Prolog
+    state persists across calls, so loaded knowledge accumulates.
+    """
+
+    def __init__(self, petta_path: str | None = None) -> None:
+        resolved = petta_path or _default_petta_path()
+        self._petta_path: str = resolved
+        python_dir = os.path.join(resolved, "python")
+        if python_dir not in sys.path:
+            sys.path.insert(0, python_dir)
+
+        from petta import PeTTa  # type: ignore[import-untyped]
+
+        self._petta = PeTTa(petta_path=resolved)
+
+    def run(self, code: str) -> Sequence[Sequence[str]]:
+        serialized = _serialize_for_petta(code)
+        raw = self._petta.process_metta_string(serialized)
+        return _parse_janus_output(raw)
+
+    def load_file(self, path: str) -> Sequence[Sequence[str]]:
+        """Load a .metta file directly (avoids string-quoting issues)."""
+        raw = self._petta.load_metta_file(path)
+        return _parse_janus_output(raw)
+
+
+def _parse_janus_output(raw: object) -> Sequence[Sequence[str]]:
+    """Convert janus PeTTa results to the standard list-of-lists format."""
+    if not raw:
+        return []
+    items: Sequence[object] = raw if isinstance(raw, (list, tuple)) else [raw]
+    results: list[Sequence[str]] = []
+    group: list[str] = []
+    for item in items:
+        text = _deserialize_from_petta(str(item))
+        group.append(text)
+    if group:
+        results.append(group)
+    return results
+
+
 def _parse_petta_output(stdout: str) -> Sequence[Sequence[str]]:
     """Parse PeTTa stdout into list-of-lists using hyperon's parse_all.
 
@@ -147,14 +207,17 @@ def _parse_petta_output(stdout: str) -> Sequence[Sequence[str]]:
 def create_runner(backend: MeTTaBackend | None = None) -> MeTTaRunner:
     """Factory for MeTTa runners, defaulting to METTA_BACKEND env var."""
     if backend is None:
-        backend = MeTTaBackend(os.environ.get("METTA_BACKEND", MeTTaBackend.HYPERON))
+        raw = os.environ.get("METTA_BACKEND", MeTTaBackend.HYPERON)
+        backend = MeTTaBackend(raw)
+
+    if backend == MeTTaBackend.JANUS:
+        petta_path = _default_petta_path()
+        logger.info("Using JanusPeTTa backend (in-process)", petta_path=petta_path)
+        return JanusPeTTaRunner(petta_path)
 
     if backend == MeTTaBackend.PETTA:
-        petta_path: str | None = os.environ.get("PETTA_PATH")
-        if not petta_path:
-            msg = "PETTA_PATH env var is required when METTA_BACKEND=petta"
-            raise ValueError(msg)
-        logger.info("Using PeTTa backend", petta_path=petta_path)
+        petta_path = _default_petta_path()
+        logger.info("Using PeTTa subprocess backend", petta_path=petta_path)
         return PeTTaRunner(petta_path)
 
     logger.debug("Using Hyperon backend")

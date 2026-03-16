@@ -7,6 +7,7 @@ Context Protocol.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -24,13 +25,16 @@ from metta_nl_corpus.constants import (
 )
 from metta_nl_corpus.lib.helpers import parse_all
 from metta_nl_corpus.lib.io import IO
-from metta_nl_corpus.lib.runner import create_runner
+from metta_nl_corpus.lib.runner import JanusPeTTaRunner, create_runner
 from metta_nl_corpus.lib.storage import AnnotationStore
 from metta_nl_corpus.models import RelationKind
 
 logger = get_logger(__name__)
 
 ENTAILMENTS_PATH = PROJECT_ROOT / "metta_nl_corpus/services/spaces/inference.metta"
+ENTAILMENTS_PETTA_PATH = (
+    PROJECT_ROOT / "metta_nl_corpus/services/spaces/inference-petta.metta"
+)
 CONTRADICTIONS_PATH = (
     PROJECT_ROOT / "metta_nl_corpus/services/spaces/contradictions.metta"
 )
@@ -1123,4 +1127,174 @@ def subprompt(
         **merged.summary(),
         "success": merged.succeeded,
         "atoms": result.val,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Query space — persistent in-process PeTTa space with expression caching
+# ---------------------------------------------------------------------------
+
+_VALIDATION_TIMEOUT = 30
+
+
+class _CachedSpace:
+    """Persistent MeTTa space that loads expressions once and caches them.
+
+    Uses JanusPeTTa (in-process via janus-swi) when available, falling back
+    to the default backend with daemon-thread timeout.  Tracks expression
+    count so the space is only rebuilt when the DB changes.
+    """
+
+    def __init__(self) -> None:
+        self._runner: JanusPeTTaRunner | None = None
+        self._loaded_count: int = 0
+
+    def _ensure_runner(self) -> JanusPeTTaRunner:
+        if self._runner is None:
+            self._runner = JanusPeTTaRunner()
+            self._runner.load_file(str(ENTAILMENTS_PETTA_PATH))
+            logger.info("cached_space_initialized")
+        return self._runner
+
+    def _load_expressions(self, expressions: list[str]) -> None:
+        runner = self._ensure_runner()
+        for expr in expressions:
+            runner.run(f"!(add-proposition {expr})")
+        self._loaded_count = len(expressions)
+        logger.info("cached_space_loaded", count=len(expressions))
+
+    def invalidate(self) -> None:
+        """Force full rebuild on next query."""
+        self._runner = None
+        self._loaded_count = 0
+
+    def query(
+        self,
+        expressions: list[str],
+        query_str: str,
+    ) -> dict[str, Any]:
+        """Run a query, rebuilding the space only if expressions changed."""
+        if len(expressions) != self._loaded_count:
+            self.invalidate()
+            self._load_expressions(expressions)
+
+        try:
+            results = self._ensure_runner().run(query_str)
+            return {"success": True, "results": results}
+        except Exception as e:
+            logger.error("cached_space_query_error", error=str(e))
+            self.invalidate()
+            return {"success": False, "error": str(e)}
+
+
+_cached_space = _CachedSpace()
+
+
+def _load_and_query(
+    expressions: list[str],
+    query: str,
+    timeout: int,
+) -> dict[str, Any]:
+    """Load expressions into a MeTTa space and run a query.
+
+    Tries the cached in-process JanusPeTTa space first.  Falls back to a
+    daemon-thread approach with the default backend on import failure.
+    """
+    try:
+        return _cached_space.query(expressions, query)
+    except Exception:
+        logger.warning("janus_unavailable_falling_back_to_thread")
+
+    container: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            runner = create_runner()
+            runner.run(ENTAILMENTS_PATH.read_text())
+            for expr in expressions:
+                runner.run(f"!(add-proposition {expr})")
+            results = runner.run(query)
+            container["status"] = "ok"
+            container["results"] = results
+        except Exception as e:
+            container["status"] = "error"
+            container["error"] = str(e)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
+        return {"success": False, "error": f"Query timed out after {timeout}s"}
+    if container.get("status") == "error":
+        return {"success": False, "error": container.get("error")}
+    if not container.get("status"):
+        return {"success": False, "error": "Query thread returned no result"}
+    return {"success": True, "results": container["results"]}
+
+
+@mcp.tool()
+def query_space(
+    query: str,
+    label: str = "expression",
+    limit: int = 500,
+    timeout: int = _VALIDATION_TIMEOUT,
+    invalidate: bool = False,
+) -> dict[str, Any]:
+    """Query stored MeTTa expressions with a persistent in-process space.
+
+    Expressions are loaded from the DB and cached in a JanusPeTTa (Prolog)
+    space that persists across calls.  The space is only rebuilt when the
+    expression count changes or ``invalidate=True`` is passed.
+
+    Args:
+        query: MeTTa query to evaluate, e.g. ``!(find-evidence-for (Animal a-cat))``.
+        label: Which annotation label to load (default: "expression").
+               Use "all" to load every annotation.
+        limit: Max annotations to load (default: 500).
+        timeout: Query timeout in seconds (default: 30, used only for fallback).
+        invalidate: Force space rebuild before querying.
+
+    Returns query results or an error.
+    """
+    if invalidate:
+        _cached_space.invalidate()
+
+    def _fetch_expressions() -> list[str]:
+        conn = store._get_conn()
+        if label == "all":
+            rows = conn.execute(
+                "SELECT metta_premise FROM annotations WHERE metta_premise IS NOT NULL LIMIT ?",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT metta_premise FROM annotations WHERE label = ? AND metta_premise IS NOT NULL LIMIT ?",
+                (label, limit),
+            ).fetchall()
+
+        atoms: list[str] = []
+        for (metta_premise,) in rows:
+            for atom in parse_all(metta_premise):
+                atoms.append(str(atom))
+        return atoms
+
+    result = IO(None) << (lambda _: _fetch_expressions()) & (
+        lambda atoms: logger.info("loaded_expressions", count=len(atoms))
+    )
+
+    if not result.succeeded or not result.val:
+        return {
+            **result.summary(),
+            "success": False,
+            "error": "No expressions found to load.",
+        }
+
+    expressions = result.val
+    query_result = _load_and_query(expressions, query, timeout)
+
+    return {
+        **query_result,
+        "expressions_loaded": len(expressions),
+        "label_filter": label,
     }
