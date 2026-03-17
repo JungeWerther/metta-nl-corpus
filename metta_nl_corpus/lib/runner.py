@@ -11,7 +11,8 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from enum import StrEnum
 from typing import Protocol
 
@@ -151,6 +152,7 @@ class JanusPeTTaRunner:
         from petta import PeTTa  # type: ignore[import-untyped]
 
         self._petta = PeTTa(petta_path=resolved)
+        self._baseline_funs = self._snapshot_funs()
 
     def run(self, code: str) -> Sequence[Sequence[str]]:
         serialized = _serialize_for_petta(code)
@@ -170,6 +172,60 @@ class JanusPeTTaRunner:
             lines = f.readlines()
         code = "".join(line for line in lines if not line.lstrip().startswith(";"))
         return self.run(code)
+
+    @staticmethod
+    def _snapshot_funs() -> set[tuple[str, int]]:
+        """Return the current set of (functor, arity) for user functions."""
+        import janus_swi as janus  # type: ignore[import-untyped]
+
+        try:
+            return {(r["F"], r["A"]) for r in janus.query("arity(F, A)")}
+        except Exception:
+            return set()
+
+    def reset(self) -> None:
+        """Retract all dynamic facts and user-defined functions.
+
+        Abolishes every ``&a/N`` predicate and retracts compiled function
+        clauses added after construction, restoring the engine to its
+        post-consult state so the next ``load_file`` starts clean.
+        """
+        import janus_swi as janus  # type: ignore[import-untyped]
+
+        # Clear space atoms
+        for row in list(janus.query("current_predicate('&a'/A)")):
+            janus.query_once(f"abolish('&a'/{row['A']})")
+
+        # Retract user functions added after baseline
+        added = self._snapshot_funs() - self._baseline_funs
+        for name, ar in added:
+            try:
+                janus.query_once(f"abolish('{name}'/{ar})")
+            except Exception:
+                pass
+        try:
+            janus.query_once("retractall(arity(_, _))")
+            for name, ar in self._baseline_funs:
+                janus.query_once(f"assertz(arity('{name}', {ar}))")
+        except Exception:
+            pass
+
+    @contextmanager
+    def fresh(self, path: str) -> Iterator[JanusPeTTaRunner]:
+        """Context manager: reset, load a space file, yield self, reset.
+
+        Usage::
+
+            with runner.fresh("path/to/inference-petta.metta") as r:
+                r.run('!(add-proposition (white swan))')
+                result = r.run('!(find-evidence-for (white swan))')
+        """
+        self.reset()
+        self.load_file(path)
+        try:
+            yield self
+        finally:
+            self.reset()
 
 
 def _parse_janus_output(raw: object) -> Sequence[Sequence[str]]:
