@@ -21,6 +21,7 @@ from metta_nl_corpus.constants import (
     ANNOTATIONS_DB_PATH,
     ANNOTATIONS_PATH,
     PROJECT_ROOT,
+    UPPER_ONTOLOGY_PATH,
     VALIDATIONS_PATH,
 )
 from metta_nl_corpus.lib.helpers import parse_all
@@ -1306,3 +1307,283 @@ def query_space(
         "expressions_loaded": len(expressions),
         "label_filter": label,
     }
+
+
+# ---------------------------------------------------------------------------
+# Semantic vector search
+# ---------------------------------------------------------------------------
+
+_embedding_cache: dict[str, tuple[list[str], Any]] = {}
+
+
+def _invalidate_embedding_cache() -> None:
+    _embedding_cache.clear()
+
+
+@mcp.tool()
+def build_embeddings(
+    field: str = "premise",
+    batch_size: int = 64,
+    limit: int = 0,
+) -> dict[str, Any]:
+    """Build semantic embeddings for annotations that don't have them yet.
+
+    First call downloads the model (~80MB). Subsequent calls are fast.
+
+    Args:
+        field: Which text field to embed -- "premise" or "metta_premise".
+        batch_size: Batch size for embedding generation.
+        limit: Max annotations to process (0 = all unembedded).
+
+    Returns count of new embeddings created.
+    """
+    from metta_nl_corpus.lib.embeddings import _MODEL_NAME, embed_texts
+
+    fetch_limit = limit if limit > 0 else 10_000
+    missing = store.annotations_without_embeddings(field=field, limit=fetch_limit)
+    if not missing:
+        return {
+            "created": 0,
+            "total_indexed": store.count_embeddings(field),
+            "message": "All annotations already have embeddings.",
+        }
+
+    total_created = 0
+    for i in range(0, len(missing), batch_size):
+        batch = missing[i : i + batch_size]
+        ids = [aid for aid, _ in batch]
+        texts = [text for _, text in batch]
+        vecs = embed_texts(texts)
+        rows = [(aid, field, vec.tolist(), _MODEL_NAME) for aid, vec in zip(ids, vecs)]
+        store.upsert_embeddings_batch(rows)
+        total_created += len(rows)
+        logger.info("embedded_batch", batch=i // batch_size + 1, count=len(rows))
+
+    _invalidate_embedding_cache()
+    return {
+        "created": total_created,
+        "total_indexed": store.count_embeddings(field),
+    }
+
+
+@mcp.tool()
+def search_knowledge(
+    query: str,
+    field: str = "premise",
+    top_k: int = 10,
+    min_score: float = 0.3,
+) -> dict[str, Any]:
+    """Find annotations semantically similar to a natural-language query.
+
+    Uses sentence-transformers embeddings for cosine similarity search.
+    Run ``build_embeddings`` first to index annotations.
+
+    Args:
+        query: Natural-language search query.
+        field: Which embedding field to search -- "premise" or "metta_premise".
+        top_k: Number of results to return (default 10).
+        min_score: Minimum similarity score threshold (default 0.3).
+
+    Returns ranked list of matching annotations with similarity scores.
+    """
+    from metta_nl_corpus.lib.embeddings import search_vectors
+
+    cache_key = field
+    if cache_key not in _embedding_cache:
+        ids, vecs = store.load_embeddings(field=field)
+        if len(ids) == 0:
+            return {
+                "error": "No embeddings found. Run build_embeddings first.",
+                "total_indexed": 0,
+            }
+        _embedding_cache[cache_key] = (ids, vecs)
+
+    ids, vecs = _embedding_cache[cache_key]
+    hits = search_vectors(query, ids, vecs, top_k=top_k)
+
+    # Fetch full annotation data for hits above threshold
+    results = []
+    conn = store._get_conn()
+    for aid, score in hits:
+        if score < min_score:
+            continue
+        row = conn.execute(
+            "SELECT premise, metta_premise, label FROM annotations WHERE annotation_id = ?",
+            (aid,),
+        ).fetchone()
+        if row:
+            results.append(
+                {
+                    "annotation_id": aid,
+                    "premise": row[0],
+                    "metta_premise": row[1],
+                    "label": row[2],
+                    "score": round(score, 4),
+                }
+            )
+
+    return {
+        "query": query,
+        "total_indexed": len(ids),
+        "results": results,
+    }
+
+
+@mcp.tool()
+def search_and_prove(
+    query: str,
+    metta_query: str,
+    top_k: int = 10,
+    field: str = "premise",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Search for relevant knowledge and use it for logical proof.
+
+    Two-phase pipeline:
+    1. Semantic search to find relevant MeTTa expressions
+    2. Load matched expressions into a MeTTa space and run the proof query
+
+    Args:
+        query: Natural-language search query for finding relevant knowledge.
+        metta_query: MeTTa query to evaluate against the found expressions,
+                     e.g. ``!(find-evidence-for (Animal a-cat))``.
+        top_k: Number of search results to load into the proof space.
+        field: Which embedding field to search.
+        timeout: Proof timeout in seconds.
+
+    Returns search results and proof results.
+    """
+    from metta_nl_corpus.lib.embeddings import search_vectors
+
+    cache_key = field
+    if cache_key not in _embedding_cache:
+        ids, vecs = store.load_embeddings(field=field)
+        if len(ids) == 0:
+            return {"error": "No embeddings found. Run build_embeddings first."}
+        _embedding_cache[cache_key] = (ids, vecs)
+
+    ids, vecs = _embedding_cache[cache_key]
+    hits = search_vectors(query, ids, vecs, top_k=top_k)
+
+    # Collect MeTTa expressions from search hits
+    conn = store._get_conn()
+    search_results = []
+    all_expressions: list[str] = []
+    for aid, score in hits:
+        row = conn.execute(
+            "SELECT premise, metta_premise FROM annotations WHERE annotation_id = ?",
+            (aid,),
+        ).fetchone()
+        if row and row[1]:
+            search_results.append(
+                {
+                    "premise": row[0],
+                    "metta_premise": row[1][:200],
+                    "score": round(score, 4),
+                }
+            )
+            for atom in parse_all(row[1]):
+                all_expressions.append(str(atom))
+
+    if not all_expressions:
+        return {
+            "search_results": search_results,
+            "proof": {
+                "success": False,
+                "error": "No MeTTa expressions found in search results.",
+            },
+        }
+
+    proof_result = _load_and_query(all_expressions, metta_query, timeout)
+
+    return {
+        "search_results": search_results,
+        "expressions_loaded": len(all_expressions),
+        "proof": proof_result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Upper ontology browser
+# ---------------------------------------------------------------------------
+
+_ontology_cache: list[tuple[str, str, str]] | None = None
+
+
+def _parse_ontology() -> list[tuple[str, str, str]]:
+    """Parse upper-ontology.metta into (relation, child, parent) triples."""
+    global _ontology_cache
+    if _ontology_cache is not None:
+        return _ontology_cache
+
+    from metta_nl_corpus.lib.vec import atoms_of, extract_sexpr
+
+    text = UPPER_ONTOLOGY_PATH.read_text()
+    triples = []
+    for expr in extract_sexpr(text):
+        atoms = atoms_of(expr)
+        if len(atoms) == 3:
+            triples.append((atoms[0], atoms[1], atoms[2]))
+    _ontology_cache = triples
+    return triples
+
+
+def _build_subtree(
+    triples: list[tuple[str, str, str]],
+    root: str,
+    relation: str,
+) -> dict[str, Any]:
+    """Build a nested tree from root downward via (relation child parent)."""
+    children_of: dict[str, list[str]] = {}
+    for rel, child, parent in triples:
+        if rel == relation:
+            children_of.setdefault(parent, []).append(child)
+
+    def _recurse(node: str) -> dict[str, Any]:
+        kids = children_of.get(node, [])
+        if not kids:
+            return {"name": node}
+        return {"name": node, "children": [_recurse(k) for k in sorted(kids)]}
+
+    return _recurse(root)
+
+
+@mcp.tool()
+def ontology_browse(
+    concept: str | None = None,
+    relation: str = "is-a",
+    direction: str = "tree",
+) -> dict[str, Any]:
+    """Browse the upper ontology hierarchy.
+
+    Args:
+        concept: Concept to query (e.g. "Continuant", "Action").
+                 None returns the full hierarchy from Entity.
+        relation: Relation to follow (default "is-a").
+        direction: "children" (what is-a X), "parents" (X is-a what),
+                   or "tree" (full subtree rooted at concept).
+
+    Returns matching ontology triples and/or a tree structure.
+    """
+    triples = _parse_ontology()
+    root = concept or "Entity"
+
+    if direction == "children":
+        matches = [
+            {"child": child, "parent": parent}
+            for rel, child, parent in triples
+            if rel == relation and parent == root
+        ]
+        return {"concept": root, "relation": relation, "children": matches}
+
+    if direction == "parents":
+        matches = [
+            {"child": child, "parent": parent}
+            for rel, child, parent in triples
+            if rel == relation and child == root
+        ]
+        return {"concept": root, "relation": relation, "parents": matches}
+
+    # tree
+    tree = _build_subtree(triples, root, relation)
+    return {"relation": relation, "tree": tree}
