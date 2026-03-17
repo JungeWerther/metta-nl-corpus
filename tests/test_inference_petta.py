@@ -12,7 +12,16 @@ from pathlib import Path
 
 import pytest
 
-from metta_nl_corpus.lib.runner import JanusPeTTaRunner
+try:
+    from metta_nl_corpus.lib.runner import JanusPeTTaRunner
+
+    _runner = JanusPeTTaRunner()
+    _HAS_PETTA = True
+except (ImportError, ValueError):
+    _HAS_PETTA = False
+    _runner = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(not _HAS_PETTA, reason="PeTTa/janus-swi not available")
 
 INFERENCE_PETTA_PATH = str(
     Path(__file__).parent.parent
@@ -21,8 +30,6 @@ INFERENCE_PETTA_PATH = str(
     / "spaces"
     / "inference-petta.metta"
 )
-
-_runner = JanusPeTTaRunner()
 
 
 @pytest.fixture()
