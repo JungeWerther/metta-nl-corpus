@@ -158,9 +158,18 @@ class JanusPeTTaRunner:
         return _parse_janus_output(raw)
 
     def load_file(self, path: str) -> Sequence[Sequence[str]]:
-        """Load a .metta file directly (avoids string-quoting issues)."""
-        raw = self._petta.load_metta_file(path)
-        return _parse_janus_output(raw)
+        """Load a .metta file, serializing operators for Prolog consistency.
+
+        Reads the file, strips comments (which may contain characters that
+        break Prolog string parsing), serializes MeTTa operators to
+        Prolog-safe names, and processes via ``process_metta_string``.
+        This ensures atoms stored during file loading use the same
+        representation as atoms added at runtime via ``run()``.
+        """
+        with open(path) as f:
+            lines = f.readlines()
+        code = "".join(line for line in lines if not line.lstrip().startswith(";"))
+        return self.run(code)
 
 
 def _parse_janus_output(raw: object) -> Sequence[Sequence[str]]:
