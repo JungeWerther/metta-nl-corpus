@@ -7,11 +7,14 @@ guarantees with single-writer/multi-reader concurrency.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 from pandera.polars import DataFrameModel
 from structlog import get_logger
@@ -98,6 +101,16 @@ class AnnotationStore:
 
         cols_v = ", ".join(f"{name} {typ}" for name, typ in _VALIDATIONS_COLUMNS)
         conn.execute(f"CREATE TABLE IF NOT EXISTS validations ({cols_v})")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                annotation_id TEXT NOT NULL,
+                field TEXT NOT NULL,
+                vector TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
+                PRIMARY KEY (annotation_id, field)
+            )
+        """)
         conn.commit()
         self._migrate_columns(conn)
 
@@ -321,6 +334,79 @@ class AnnotationStore:
             count += 1
         logger.info("Imported from parquet", path=str(path), rows=count, table=table)
         return count
+
+    # -- embeddings ------------------------------------------------------------
+
+    def upsert_embedding(
+        self,
+        annotation_id: str,
+        field: str,
+        vector: list[float],
+        model: str = "all-MiniLM-L6-v2",
+    ) -> None:
+        """Store or update an embedding vector (as JSON)."""
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO embeddings (annotation_id, field, vector, model) "
+            "VALUES (?, ?, ?, ?)",
+            (annotation_id, field, json.dumps(vector), model),
+        )
+        conn.commit()
+
+    def upsert_embeddings_batch(
+        self,
+        rows: Sequence[tuple[str, str, list[float], str]],
+    ) -> int:
+        """Batch upsert embeddings. Returns count inserted."""
+        conn = self._get_conn()
+        conn.executemany(
+            "INSERT OR REPLACE INTO embeddings (annotation_id, field, vector, model) "
+            "VALUES (?, ?, ?, ?)",
+            [(aid, field, json.dumps(vec), model) for aid, field, vec, model in rows],
+        )
+        conn.commit()
+        return len(rows)
+
+    def load_embeddings(
+        self,
+        field: str = "premise",
+        model: str = "all-MiniLM-L6-v2",
+    ) -> tuple[list[str], np.ndarray]:
+        """Load all embeddings for a field. Returns (annotation_ids, vectors_matrix)."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT annotation_id, vector FROM embeddings WHERE field = ? AND model = ?",
+            (field, model),
+        ).fetchall()
+        if not rows:
+            return [], np.empty((0, 384), dtype=np.float32)
+        ids = [r[0] for r in rows]
+        vecs = np.array([json.loads(r[1]) for r in rows], dtype=np.float32)
+        return ids, vecs
+
+    def count_embeddings(self, field: str = "premise") -> int:
+        """Count embeddings for a given field."""
+        conn = self._get_conn()
+        return conn.execute(
+            "SELECT COUNT(*) FROM embeddings WHERE field = ?", (field,)
+        ).fetchone()[0]
+
+    def annotations_without_embeddings(
+        self,
+        field: str = "premise",
+        limit: int = 500,
+    ) -> list[tuple[str, str]]:
+        """Return (annotation_id, text) for annotations missing embeddings."""
+        conn = self._get_conn()
+        col = "premise" if field == "premise" else "metta_premise"
+        rows = conn.execute(
+            f"SELECT a.annotation_id, a.{col} FROM annotations a "
+            f"LEFT JOIN embeddings e ON a.annotation_id = e.annotation_id AND e.field = ? "
+            f"WHERE e.annotation_id IS NULL AND a.{col} IS NOT NULL AND a.{col} != '' "
+            f"LIMIT ?",
+            (field, limit),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     # -- helpers ---------------------------------------------------------------
 
