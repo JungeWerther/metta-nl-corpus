@@ -141,6 +141,79 @@ def test_open_variable_query(runner):
     assert "white" in all_results
 
 
+# === PLN v2 format (STV-annotated facts) ===
+#
+# PeTTa cannot evaluate add-proposition-tv's let-chained side effects,
+# so we split into add-proposition + add-atom for the TV attachment.
+
+
+def _add_tv(runner, prop: str, s: str = "1.0", c: str = "0.9") -> None:
+    """Add a proposition with a truth value, PeTTa-safe."""
+    runner.run(f"!(add-proposition ({prop}))")
+    runner.run(f"!(add-atom &a (≞ ({prop}) (STV {s} {c})))")
+
+
+def test_v2_add_proposition_tv(runner):
+    """v2 format facts added with TV are retrievable."""
+    _add_tv(runner, "boy Boy1")
+    assert _truthy(runner.run("!(find-evidence-for (boy Boy1))"))
+
+
+def test_v2_tv_retrieval(runner):
+    """Truth value is retrievable after adding proposition with TV."""
+    _add_tv(runner, "boy Boy1")
+    r = runner.run("!(find-evidence-for-tv (boy Boy1))")
+    assert _truthy(r)
+    joined = " ".join(str(x) for x in r[-1])
+    assert "STV" in joined
+
+
+def test_v2_tv_propagation(runner):
+    """Truth values propagate through transitive inference."""
+    _add_tv(runner, "animal mammal")
+    _add_tv(runner, "mammal Dog1")
+    r = runner.run("!(find-evidence-for-tv (animal Dog1))")
+    assert _truthy(r)
+    joined = " ".join(str(x) for x in r[-1])
+    assert "STV" in joined
+
+
+def test_v2_entailment_shared_witness(runner):
+    """Entailment works when premise and hypothesis share a witness (v2 style)."""
+    _add_tv(runner, "boy Boy1")
+    _add_tv(runner, "little Boy1")
+    _add_tv(runner, "playing-with Boy1 Toy1")
+    _add_tv(runner, "toy Toy1")
+    assert _truthy(runner.run("!(find-evidence-for (boy Boy1))"))
+    assert _truthy(runner.run("!(find-evidence-for (playing-with Boy1 Toy1))"))
+
+
+def test_v2_neutral_no_derivation(runner):
+    """Hypothesis-only predicates cannot be derived from premise (neutral)."""
+    _add_tv(runner, "boy Boy1")
+    _add_tv(runner, "playing-with Boy1 Toy1")
+    assert not _truthy(
+        runner.run("!(find-evidence-for (caught-playing-with Boy1 Toy1))")
+    )
+    assert not _truthy(runner.run("!(find-evidence-for ⊥)"))
+
+
+def test_v2_contradiction_with_tv(runner):
+    """Contradiction detection works with STV-annotated facts."""
+    _add_tv(runner, "running Dog1")
+    runner.run("!(add-proposition ((is-not running) Dog1))")
+    runner.run("!(add-atom &a (≞ ((is-not running) Dog1) (STV 1.0 0.9)))")
+    assert _truthy(runner.run("!(find-evidence-for ⊥)"))
+
+
+def test_v2_transitive_entailment_with_tv(runner):
+    """Transitive entailment with truth values across two hops."""
+    _add_tv(runner, "animal mammal", "0.95", "0.8")
+    _add_tv(runner, "mammal dog")
+    _add_tv(runner, "dog Fido1")
+    assert _truthy(runner.run("!(find-evidence-for (animal Fido1))"))
+
+
 # === Match consistency (regression for serialization mismatch) ===
 
 
