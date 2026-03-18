@@ -72,9 +72,11 @@
 (= (add-proposition ((is-not $rel) $ob $sub)) (add-atom &a (=> (, ($rel $ob $sub) ((is-not $rel) $ob $sub)) ⊥)))
 
 ;; === PLN Truth Values ===
+;; PeTTa-safe: add-atom returns `true` (not `()` as in Hyperon),
+;; so use $_ to discard the return value.
 (= (add-proposition-tv $prop (STV $s $c))
-   (let () (add-proposition $prop)
-     (let () (add-atom &a (≞ $prop (STV $s $c)))
+   (let $_ (add-proposition $prop)
+     (let $_ (add-atom &a (≞ $prop (STV $s $c)))
        (≞ $prop (STV $s $c)))))
 
 (= (get-tv $expr) (match &a (≞ $expr (STV $s $c)) (STV $s $c)))
