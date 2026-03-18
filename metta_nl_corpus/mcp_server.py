@@ -91,12 +91,60 @@ def contradictions_space() -> str:
 def get_annotation_guideline() -> dict[str, Any]:
     """Read the annotation guideline used as the LLM system prompt.
 
-    Returns the guideline content and its file path for editing.
+    Returns the guideline content, its file path, and the active version name.
     """
+    resolved = ANNOTATION_GUIDELINE_PATH.resolve()
     return {
         "path": str(ANNOTATION_GUIDELINE_PATH),
+        "active_path": str(resolved),
+        "version": resolved.stem,
         "content": ANNOTATION_GUIDELINE_PATH.read_text(),
     }
+
+
+@mcp.tool()
+def list_annotation_guidelines() -> dict[str, Any]:
+    """List all available annotation guideline versions.
+
+    Returns the available versions in documentation/prompts/ and which is active.
+    """
+    from metta_nl_corpus.constants import PROMPTS_DIR
+
+    versions = sorted(p for p in PROMPTS_DIR.glob("*.md") if p.name != "default.md")
+    active = ANNOTATION_GUIDELINE_PATH.resolve().stem
+    return {
+        "active": active,
+        "versions": [
+            {"name": p.stem, "path": str(p), "active": p.stem == active}
+            for p in versions
+        ],
+    }
+
+
+@mcp.tool()
+def set_annotation_guideline(version: str) -> dict[str, Any]:
+    """Switch the active annotation guideline to a different version.
+
+    Updates the default.md symlink and invalidates the in-process cache.
+
+    Args:
+        version: Version name (e.g. 'v1_standard', 'v2_universal') — stem of the .md file.
+    """
+    from metta_nl_corpus.constants import PROMPTS_DIR
+
+    global _ANNOTATION_GUIDELINE_CACHE
+    target = PROMPTS_DIR / f"{version}.md"
+    if not target.exists():
+        available = [p.stem for p in PROMPTS_DIR.glob("*.md") if p.name != "default.md"]
+        return {
+            "success": False,
+            "error": f"Version '{version}' not found. Available: {available}",
+        }
+    default_link = PROMPTS_DIR / "default.md"
+    default_link.unlink(missing_ok=True)
+    default_link.symlink_to(target.name)
+    _ANNOTATION_GUIDELINE_CACHE = None
+    return {"success": True, "version": version, "path": str(target)}
 
 
 @mcp.tool()
