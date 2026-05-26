@@ -1,3 +1,4 @@
+from functools import cache
 from pathlib import Path
 
 import polars as pl
@@ -21,15 +22,22 @@ logger = getLogger(__name__)
 SUBSET_SIZE = 50
 
 
-training_dataset_path = hf_hub_download(
-    repo_id="stanfordnlp/snli",
-    filename="plain_text/train-00000-of-00001.parquet",
-    repo_type="dataset",
-)
+@cache
+def _get_training_dataset_path() -> str:
+    """Resolve the SNLI training parquet path, downloading from HF on first call.
+
+    Lazily invoked so importing this module does not require network access
+    (tests, type-checking, MCP server bootstrap all import this transitively).
+    """
+    return hf_hub_download(
+        repo_id="stanfordnlp/snli",
+        filename="plain_text/train-00000-of-00001.parquet",
+        repo_type="dataset",
+    )
 
 
 class BaseConfig(Config):
-    training_dataset: str = training_dataset_path
+    training_dataset: str | None = None  # falls back to HF SNLI when unset
     version: str | None = None  # <None> for all versions
 
 
@@ -53,7 +61,7 @@ load_parquet_from_path = to_boxed_path_loader(pl.read_parquet)
 def raw_training_data(
     context: AssetExecutionContext, config: BaseConfig
 ) -> pl.DataFrame:
-    file_path = Path(training_dataset_path)
+    file_path = Path(config.training_dataset or _get_training_dataset_path())
     df = (
         load_parquet_from_path(file_path)
         | with_context(context)
