@@ -1,10 +1,11 @@
 import asyncio
+import json
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import httpx
@@ -317,23 +318,33 @@ def _create_metta_agent(
 VALIDATION_TIMEOUT_SECONDS = 10
 
 
-def validate_expressions_truthy_after_adding_expressions_to_space(
+class ValidationTrace(NamedTuple):
+    """Outcome of a single MeTTa validation run, including the proof chain."""
+
+    is_valid: bool
+    expressions_added: list[str]
+    inference_result: str  # str repr of `runner.run(expression_to_evaluate)`
+
+
+def _run_validation_with_trace(
     expressions_to_add_to_space: Sequence[str],
     grounding_space_path: Path,
     expression_to_evaluate: str,
     verbose: bool = False,
     timeout: int = VALIDATION_TIMEOUT_SECONDS,
-) -> bool:
-    """Run MeTTa validation in a daemon thread with timeout.
+) -> ValidationTrace:
+    """Run MeTTa validation in a daemon thread with timeout, capturing the trace.
 
     The GIL is released during C-level MeTTa calls, so the main thread
     can join with a timeout.  Daemon threads are cleaned up on process exit.
     """
-    if not expressions_to_add_to_space:
-        logger.debug("No expressions to add, returning False")
-        return False
+    expressions_list = list(expressions_to_add_to_space)
 
-    logger.info("Validating expressions", expressions=expressions_to_add_to_space)
+    if not expressions_list:
+        logger.debug("No expressions to add, returning False")
+        return ValidationTrace(is_valid=False, expressions_added=[], inference_result="")
+
+    logger.info("Validating expressions", expressions=expressions_list)
 
     container: dict[str, Any] = {}
 
@@ -342,7 +353,7 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             runner = create_runner()
             metta_code = grounding_space_path.read_text()
             runner.run(metta_code)
-            for expression in expressions_to_add_to_space:
+            for expression in expressions_list:
                 runner.run(expression)
             if verbose:
                 runner.run("!(all)")
@@ -365,7 +376,11 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             timeout=timeout,
             expression_to_evaluate=expression_to_evaluate,
         )
-        return False
+        return ValidationTrace(
+            is_valid=False,
+            expressions_added=expressions_list,
+            inference_result="<timeout>",
+        )
 
     if container.get("status") == "error":
         logger.warning(
@@ -373,34 +388,59 @@ def validate_expressions_truthy_after_adding_expressions_to_space(
             error=container.get("error"),
             expression_to_evaluate=expression_to_evaluate,
         )
-        return False
+        return ValidationTrace(
+            is_valid=False,
+            expressions_added=expressions_list,
+            inference_result=f"<error: {container.get('error')}>",
+        )
 
     if not container.get("status"):
         logger.warning(
             "MeTTa validation thread returned no result",
             expression_to_evaluate=expression_to_evaluate,
         )
-        return False
-
-    if container["value"]:
-        logger.info(
-            "MeTTa expressions pass validation",
-            expression=expression_to_evaluate,
-            result=container["result"],
+        return ValidationTrace(
+            is_valid=False,
+            expressions_added=expressions_list,
+            inference_result="<no result>",
         )
-        return True
 
+    result_str = str(container["result"])
+    is_valid = bool(container["value"])
     logger.info(
-        "MeTTa expressions are not valid.",
+        "MeTTa expressions pass validation"
+        if is_valid
+        else "MeTTa expressions are not valid.",
         expression=expression_to_evaluate,
         result=container["result"],
     )
-    return False
+    return ValidationTrace(
+        is_valid=is_valid,
+        expressions_added=expressions_list,
+        inference_result=result_str,
+    )
 
 
-def validate_expressions_are_entailing(
-    metta_premise: str, metta_hypothesis: str, verbose: bool = False
+def validate_expressions_truthy_after_adding_expressions_to_space(
+    expressions_to_add_to_space: Sequence[str],
+    grounding_space_path: Path,
+    expression_to_evaluate: str,
+    verbose: bool = False,
+    timeout: int = VALIDATION_TIMEOUT_SECONDS,
 ) -> bool:
+    """Bool-returning wrapper around `_run_validation_with_trace`."""
+    return _run_validation_with_trace(
+        expressions_to_add_to_space,
+        grounding_space_path,
+        expression_to_evaluate,
+        verbose=verbose,
+        timeout=timeout,
+    ).is_valid
+
+
+def _entailing_trace(
+    metta_premise: str, metta_hypothesis: str, verbose: bool = False
+) -> ValidationTrace:
     parsed_premise = parse_all(metta_premise)
     hypothesis_tuple = to_metta_tuple(metta_hypothesis)
     expression_to_evaluate = f"!(find-evidence-for {hypothesis_tuple})"
@@ -412,7 +452,7 @@ def validate_expressions_are_entailing(
         expression_to_evaluate=expression_to_evaluate,
         expressions_to_add=expressions_to_add,
     )
-    return validate_expressions_truthy_after_adding_expressions_to_space(
+    return _run_validation_with_trace(
         expressions_to_add,
         ENTAILMENTS_PATH,
         expression_to_evaluate,
@@ -420,9 +460,15 @@ def validate_expressions_are_entailing(
     )
 
 
-def validate_expressions_are_contradictory(
+def validate_expressions_are_entailing(
     metta_premise: str, metta_hypothesis: str, verbose: bool = False
 ) -> bool:
+    return _entailing_trace(metta_premise, metta_hypothesis, verbose=verbose).is_valid
+
+
+def _contradictory_trace(
+    metta_premise: str, metta_hypothesis: str, verbose: bool = False
+) -> ValidationTrace:
     parsed_premise = parse_all(metta_premise)
     parsed_hypothesis = parse_all(metta_hypothesis)
     expression_to_evaluate = "!(find-evidence-for ⊥)"
@@ -437,7 +483,7 @@ def validate_expressions_are_contradictory(
         expression_to_evaluate=expression_to_evaluate,
         expressions_to_add=expressions_to_add,
     )
-    return validate_expressions_truthy_after_adding_expressions_to_space(
+    return _run_validation_with_trace(
         expressions_to_add,
         ENTAILMENTS_PATH,
         expression_to_evaluate,
@@ -445,45 +491,72 @@ def validate_expressions_are_contradictory(
     )
 
 
-def validate_expressions_are_neutral(metta_premise: str, metta_hypothesis: str) -> bool:
-    is_entailing = validate_expressions_are_entailing(metta_premise, metta_hypothesis)
-    is_contradictory = validate_expressions_are_contradictory(
-        metta_premise, metta_hypothesis
-    )
+def validate_expressions_are_contradictory(
+    metta_premise: str, metta_hypothesis: str, verbose: bool = False
+) -> bool:
+    return _contradictory_trace(
+        metta_premise, metta_hypothesis, verbose=verbose
+    ).is_valid
+
+
+def _neutral_trace(metta_premise: str, metta_hypothesis: str) -> ValidationTrace:
+    ent = _entailing_trace(metta_premise, metta_hypothesis)
+    con = _contradictory_trace(metta_premise, metta_hypothesis)
+    is_neutral = not (ent.is_valid or con.is_valid)
     logger.debug(
         "Checking neutral",
-        is_entailing=is_entailing,
-        is_contradictory=is_contradictory,
-        result=not (is_entailing or is_contradictory),
+        is_entailing=ent.is_valid,
+        is_contradictory=con.is_valid,
+        result=is_neutral,
     )
-    return not (is_entailing or is_contradictory)
+    combined_result = json.dumps(
+        {
+            "entailment": ent.inference_result,
+            "contradiction": con.inference_result,
+        }
+    )
+    return ValidationTrace(
+        is_valid=is_neutral,
+        expressions_added=[*ent.expressions_added, *con.expressions_added],
+        inference_result=combined_result,
+    )
+
+
+def validate_expressions_are_neutral(metta_premise: str, metta_hypothesis: str) -> bool:
+    return _neutral_trace(metta_premise, metta_hypothesis).is_valid
+
+
+def _validate_by_label_with_trace(
+    label: RelationKind, metta_premise: str, metta_hypothesis: str
+) -> ValidationTrace:
+    trace_fn = {
+        RelationKind.ENTAILMENT: _entailing_trace,
+        RelationKind.CONTRADICTION: _contradictory_trace,
+        RelationKind.NEUTRAL: _neutral_trace,
+    }.get(label, _neutral_trace)  # Default to neutral if label not found
+
+    logger.debug(
+        "validate_expressions_by_label called",
+        label=label,
+        trace_fn=trace_fn.__name__,
+        metta_premise=metta_premise,
+        metta_hypothesis=metta_hypothesis,
+    )
+    trace = trace_fn(metta_premise, metta_hypothesis)
+    logger.debug(
+        "validate_expressions_by_label result",
+        label=label,
+        result=trace.is_valid,
+    )
+    return trace
 
 
 def validate_expressions_by_label(
     label: RelationKind, metta_premise: str, metta_hypothesis: str
 ) -> bool:
-    validation_function = {
-        RelationKind.ENTAILMENT: validate_expressions_are_entailing,
-        RelationKind.CONTRADICTION: validate_expressions_are_contradictory,
-        RelationKind.NEUTRAL: validate_expressions_are_neutral,
-    }.get(
-        label, validate_expressions_are_neutral
-    )  # Default to neutral if label not found
-
-    logger.debug(
-        "validate_expressions_by_label called",
-        label=label,
-        validation_function=validation_function.__name__,
-        metta_premise=metta_premise,
-        metta_hypothesis=metta_hypothesis,
-    )
-    result = validation_function(metta_premise, metta_hypothesis)
-    logger.debug(
-        "validate_expressions_by_label result",
-        label=label,
-        result=result,
-    )
-    return result
+    return _validate_by_label_with_trace(
+        label, metta_premise, metta_hypothesis
+    ).is_valid
 
 
 def get_grounding_space_versions():
@@ -543,7 +616,7 @@ def _create_annotation_and_validation(
     record["output_tokens"] = output_tokens
     annotation = Annotation.validate(pandera_record(record))
 
-    is_valid = validate_expressions_by_label(
+    trace = _validate_by_label_with_trace(
         label=label,
         metta_premise=metta_premise_cleaned,
         metta_hypothesis=metta_hypothesis_cleaned,
@@ -554,13 +627,15 @@ def _create_annotation_and_validation(
             {
                 Validation.validation_id: str(uuid4()),
                 Validation.annotation_id: annotation_id,
-                Validation.is_valid: is_valid,
+                Validation.is_valid: trace.is_valid,
                 Validation.relation_kind: label,
                 Validation.entailment_space_hash: ENTAILMENT_SPACE_HASH,
                 Validation.entailment_git_commit_hash: ENTAILMENT_GIT_HASH,
                 Validation.contradiction_space_hash: CONTRADICTIONS_SPACE_HASH,
                 Validation.contradiction_git_commit_hash: CONTRADICTIONS_GIT_HASH,
                 Validation.validation_timestamp: datetime.now().isoformat(),
+                Validation.expressions_added: json.dumps(trace.expressions_added),
+                Validation.inference_result: trace.inference_result,
             }
         )
     )

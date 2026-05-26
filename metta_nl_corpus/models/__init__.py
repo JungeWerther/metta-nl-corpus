@@ -5,7 +5,7 @@ from pandera.polars import DataFrameModel, Field
 from pandera.typing.common import UInt32
 from pandera.typing.polars import DataFrame
 
-DATA_VERSION = "0.0.5"
+DATA_VERSION = "0.0.6"
 
 
 class TrainingBase(DataFrameModel):
@@ -59,6 +59,12 @@ class Validation(DataFrameModel):
     contradiction_git_commit_hash: str | None  # Git commit hash of the space file
 
     validation_timestamp: str  # ISO timestamp
+
+    # JSON-encoded list of `!(add-proposition ...)` expressions fed to the MeTTa runner.
+    expressions_added: str | None = Field(default=None, nullable=True)
+    # str repr of `runner.run(expression_to_evaluate)` — the proof / inference chain.
+    # For NEUTRAL, JSON object with `entailment` and `contradiction` sub-results.
+    inference_result: str | None = Field(default=None, nullable=True)
 
     class Config:
         coerce = True
