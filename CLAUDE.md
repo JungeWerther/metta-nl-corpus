@@ -50,3 +50,7 @@ uv run pytest tests/ -v                                       # Tests
 ## Coding Rules
 
 See `.claude/rules.md` for coding conventions: StrEnum for constants, structlog (never print), typed everything with NamedTuple returns, abstract types (Mapping/Sequence).
+
+## Branch Naming
+
+Prefix branches with `seb/` (e.g. `seb/neural-symbolic-metta`). If a session is started with a `claude/`-prefixed branch by the harness, rename it before pushing.
