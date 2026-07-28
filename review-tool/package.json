@@ -1,0 +1,49 @@
+{
+  "name": "metta-review-tool",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "prisma generate && next build",
+    "postinstall": "prisma generate",
+    "start": "next start",
+    "lint": "eslint",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "import": "tsx scripts/import.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test && npm run test:integration"
+  },
+  "dependencies": {
+    "@hexclave/next": "^1.0.45",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "next": "^16.2.6",
+    "pg": "^8.21.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "prisma": "^7.8.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.22.3",
+    "typescript": "^5",
+    "vitest": "^4.1.9"
+  }
+}

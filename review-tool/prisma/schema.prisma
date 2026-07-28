@@ -1,0 +1,133 @@
+// MeTTa Review Tool — data model
+// Five UUID-linked tables: Annotation (source) -> Correct / Failed -> Fixed -> Final.
+// Verdict tables are per-reviewer (composite unique) and carry the reviewer's
+// id + name plus the full pair content (self-contained for export).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Origin {
+  DIRECT
+  FIXED
+}
+
+/// Source data, imported from annotations.json. Read-only.
+model Annotation {
+  id              String  @id
+  premise         String
+  hypothesis      String
+  label           String
+  mettaPremise    String
+  mettaHypothesis String
+  generationModel String?
+  version         String?
+  sourceIndex     Int?
+  createdAt       DateTime @default(now())
+
+  corrects Correct[]
+  faileds  Failed[]
+  fixes    Fixed[]
+  finals   Final[]
+
+  @@index([sourceIndex])
+}
+
+/// Approved as-is (both sides Y). One per (annotation, reviewer).
+model Correct {
+  id           String     @id @default(uuid())
+  annotationId String
+  annotation   Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+
+  premise         String
+  hypothesis      String
+  label           String
+  mettaPremise    String
+  mettaHypothesis String
+  note            String?
+
+  reviewerId   String
+  reviewerName String?
+  createdAt    DateTime @default(now())
+
+  @@unique([annotationId, reviewerId])
+  @@index([reviewerId])
+}
+
+/// At least one side N. Tracks which failed. One per (annotation, reviewer).
+model Failed {
+  id           String     @id @default(uuid())
+  annotationId String
+  annotation   Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+
+  premise         String
+  hypothesis      String
+  label           String
+  mettaPremise    String
+  mettaHypothesis String
+
+  premiseFailed    Boolean
+  hypothesisFailed Boolean
+  note             String?
+  reviewerId       String
+  reviewerName     String?
+  isFixed          Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  fix Fixed?
+
+  @@unique([annotationId, reviewerId])
+  @@index([reviewerId])
+  @@index([isFixed])
+}
+
+/// A correction of a Failed row. Keeps original + fixed MeTTa and old->new UUID.
+model Fixed {
+  id         String     @id @default(uuid())
+  failedId   String     @unique
+  failed     Failed     @relation(fields: [failedId], references: [id], onDelete: Cascade)
+  oldUuid    String
+  annotation Annotation @relation(fields: [oldUuid], references: [id], onDelete: Cascade)
+
+  premise                 String
+  hypothesis              String
+  label                   String
+  originalMettaPremise    String
+  originalMettaHypothesis String
+  fixedMettaPremise       String
+  fixedMettaHypothesis    String
+  note                    String?
+
+  reviewerId   String
+  reviewerName String?
+  createdAt    DateTime @default(now())
+
+  @@index([reviewerId])
+}
+
+/// The deliverable = Correct union Fixed. Self-contained for export.
+model Final {
+  id                 String     @id @default(uuid())
+  sourceAnnotationId String
+  annotation         Annotation @relation(fields: [sourceAnnotationId], references: [id], onDelete: Cascade)
+
+  premise         String
+  hypothesis      String
+  label           String
+  mettaPremise    String
+  mettaHypothesis String
+  note            String?
+  origin          Origin
+  reviewerId      String
+  reviewerName    String?
+  finalizedAt     DateTime @default(now())
+
+  @@index([reviewerId])
+  @@index([origin])
+  @@index([sourceAnnotationId])
+}
